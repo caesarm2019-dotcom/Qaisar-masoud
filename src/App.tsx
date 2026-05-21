@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser, sendEmailVerification 
+  signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser, sendEmailVerification,
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile
 } from 'firebase/auth';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
@@ -226,6 +227,7 @@ export default function App() {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
   const [toast, setToast] = useState<{ title: string; body: string; type?: string; data?: any } | null>(null);
   const [lastNotificationId, setLastNotificationId] = useState<string | null>(null);
@@ -542,12 +544,17 @@ export default function App() {
     }
   }, []);
 
-  const handleLogin = async () => {
+  const handleLogin = () => {
+    setShowLoginModal(true);
+  };
+
+  const loginWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     
     try {
       await signInWithPopup(auth, provider);
+      setShowLoginModal(false);
     } catch (error: any) {
       console.error('Login failed', error);
       
@@ -917,6 +924,13 @@ export default function App() {
             isOpen={showLogoutConfirm}
             onClose={() => setShowLogoutConfirm(false)}
             onConfirm={confirmLogout}
+          />
+        )}
+        {showLoginModal && (
+          <AuthModal 
+            isOpen={showLoginModal}
+            onClose={() => setShowLoginModal(false)}
+            onGoogleLogin={loginWithGoogle}
           />
         )}
       </AnimatePresence>
@@ -2696,6 +2710,272 @@ function LogoutConfirmModal({ isOpen, onClose, onConfirm }: { isOpen: boolean, o
               إلغاء
             </button>
           </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClose: () => void, onGoogleLogin: () => void }) {
+  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
+  const [name, setName] = useState('');
+  const [emailOrPhone, setEmailOrPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  if (!isOpen) return null;
+
+  const validateAndFormatEmail = (input: string) => {
+    const trimmed = input.trim();
+    if (!trimmed) return '';
+    if (trimmed.includes('@')) {
+      return trimmed;
+    }
+    // Clean all non-digits to test if it is a phone number
+    const digits = trimmed.replace(/\D/g, '');
+    if (digits.length >= 7) {
+      return `${digits}@souqiraq.com`;
+    }
+    return trimmed;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+
+    const formatted = validateAndFormatEmail(emailOrPhone);
+    if (!formatted) {
+      setErrorMsg('يرجى إدخال البريد الإلكتروني أو رقم الهاتف!');
+      return;
+    }
+    if (password.length < 6) {
+      setErrorMsg('يجب أن تكون كلمة المرور 6 خانات أو أكثر!');
+      return;
+    }
+    if (activeTab === 'register' && !name.trim()) {
+      setErrorMsg('يرجى إدخال اسمك الكريم!');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      if (activeTab === 'login') {
+        await signInWithEmailAndPassword(auth, formatted, password);
+        onClose();
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, formatted, password);
+        // Set user profile display name
+        await updateProfile(userCredential.user, {
+          displayName: name.trim()
+        });
+        
+        // Let's create user profile in dynamic firestore
+        try {
+          const userRef = doc(db, 'users', userCredential.user.uid);
+          await setDoc(userRef, {
+            displayName: name.trim(),
+            email: formatted,
+            createdAt: serverTimestamp(),
+            uid: userCredential.user.uid,
+            rating: 5,
+            reviewsCount: 0,
+            verifiedSeller: false,
+            notificationPrefs: {
+              newListings: true,
+              priceDrops: true,
+              messages: true,
+              offers: true
+            }
+          }, { merge: true });
+        } catch (fsErr) {
+          console.error("Failed to write profile doc:", fsErr);
+        }
+
+        onClose();
+      }
+    } catch (error: any) {
+      console.error("Auth process error:", error);
+      let arabicErrMsg = 'حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى.';
+      
+      switch (error.code) {
+        case 'auth/email-already-in-use':
+          arabicErrMsg = 'هذا الحساب (أو رقم الهاتف) مسجل بالفعل! جرب تسجيل الدخول.';
+          break;
+        case 'auth/weak-password':
+          arabicErrMsg = 'كلمة المرور ضعيفة جداً! يجب أن تكون 6 خانات على الأقل.';
+          break;
+        case 'auth/invalid-email':
+          arabicErrMsg = 'البريد أو الهاتف غير صالح!';
+          break;
+        case 'auth/user-not-found':
+        case 'auth/wrong-password':
+        case 'auth/invalid-credential':
+          arabicErrMsg = 'بيانات الدخول غير صحيحة! يرجى التأكد من البريد/الهاتف وكلمة المرور.';
+          break;
+        case 'auth/too-many-requests':
+          arabicErrMsg = 'لقد حاولت تسجيل الدخول عدة مرات بشكل خاطئ! تم حظرك مؤقتاً، يرجى إعادة المحاولة لاحقاً.';
+          break;
+      }
+      setErrorMsg(arabicErrMsg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="relative bg-white rounded-[40px] p-8 w-full max-w-md shadow-2xl overflow-hidden"
+      >
+        <div className="absolute top-0 right-0 w-32 h-32 bg-brand-primary/5 rounded-full -mr-16 -mt-16 blur-2xl animate-pulse" />
+        
+        <div className="relative z-10 flex flex-col">
+          {/* Header */}
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-2xl font-serif font-black text-brand-primary">سوق العراق</h3>
+            <button 
+              onClick={onClose} 
+              className="w-8 h-8 rounded-full bg-brand-muted flex items-center justify-center hover:bg-brand-muted/80 text-brand-secondary transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Subtitle */}
+          <p className="text-sm text-brand-secondary/60 mb-6 leading-relaxed text-right">
+            أهلاً بك في منصة التجارة العراقية الأرقى! تواصل مع الباعة والمشترين بكل سهولة وأمان.
+          </p>
+
+          {/* Tabs */}
+          <div className="flex bg-brand-muted p-1 rounded-2xl mb-6">
+            <button
+              onClick={() => { setActiveTab('login'); setErrorMsg(''); }}
+              className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${
+                activeTab === 'login' 
+                  ? 'bg-white text-brand-primary shadow-sm' 
+                  : 'text-brand-secondary/70 hover:text-brand-primary'
+              }`}
+            >
+              تسجيل الدخول
+            </button>
+            <button
+              onClick={() => { setActiveTab('register'); setErrorMsg(''); }}
+              className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${
+                activeTab === 'register' 
+                  ? 'bg-white text-brand-primary shadow-sm' 
+                  : 'text-brand-secondary/70 hover:text-brand-primary'
+              }`}
+            >
+              إنشاء حساب جديد
+            </button>
+          </div>
+
+          {/* Error Message */}
+          {errorMsg && (
+            <motion.div 
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-xs font-bold mb-4 flex items-center gap-2"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
+            </motion.div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleSubmit} className="space-y-4 text-right">
+            {activeTab === 'register' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-black text-brand-primary">الاسم الكريم</label>
+                <input 
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="مثال: أبو محمد البغدادي"
+                  className="w-full bg-brand-muted border-none p-4 rounded-2xl text-sm font-bold outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all text-right"
+                />
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-black text-brand-primary">رقم الهاتف العراقي أو البريد الإلكتروني</label>
+              <input 
+                type="text"
+                required
+                value={emailOrPhone}
+                onChange={(e) => setEmailOrPhone(e.target.value)}
+                placeholder="مثال: 07701234567 أو mail@example.com"
+                className="w-full bg-brand-muted border-none p-4 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all text-right ltr"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-black text-brand-primary">كلمة المرور</label>
+              <input 
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••"
+                className="w-full bg-brand-muted border-none p-4 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all text-right ltr"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 bg-brand-primary text-white font-black rounded-2xl hover:bg-brand-primary/95 transition-all active:scale-[0.98] shadow-lg shadow-brand-primary/10 flex items-center justify-center gap-2 mt-2 disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>جاري المعالجة...</span>
+                </>
+              ) : (
+                <span>{activeTab === 'login' ? 'دخول سريع' : 'إنشاء حسابي مجاناً'}</span>
+              )}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div className="relative flex items-center justify-center my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-brand-border/60" />
+            </div>
+            <span className="relative px-4 text-[10px] font-black tracking-widest uppercase bg-white text-brand-secondary/50">أو</span>
+          </div>
+
+          {/* Social Sign In (For Web Users) */}
+          <button
+            onClick={onGoogleLogin}
+            type="button"
+            className="w-full py-4 border-2 border-brand-border hover:bg-brand-muted hover:border-brand-primary/30 transition-all rounded-2xl flex items-center justify-center gap-2.5 active:scale-[0.98]"
+          >
+            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+              <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.53 14.98 1 12 1 7.35 1 3.28 3.67 1.13 7.58l3.92 3.04C5.99 7.42 8.79 5.04 12 5.04z" />
+              <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.36H12v4.51h6.46c-.29 1.48-1.12 2.73-2.38 3.58l3.7 2.87c2.16-1.99 3.71-4.92 3.71-8.6z" />
+              <path fill="#FBBC05" d="M5.05 10.62a7.12 7.12 0 0 1 0 2.76l-3.92 3.04A11.96 11.96 0 0 1 1.13 7.58l3.92 3.04z" />
+              <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.7-2.87c-1.03.69-2.35 1.1-4.26 1.1-3.21 0-6.01-2.38-6.95-5.58H1.13v3.13C3.28 20.33 7.35 23 12 23z" />
+            </svg>
+            <span className="text-sm font-bold text-gray-700">دخول بواسطة Google</span>
+          </button>
+          
+          <p className="text-[10px] text-center text-brand-secondary/40 mt-5 leading-normal">
+            إذا كنت تستخدم هاتف أندرويد وتواجه مشكلة في Google، يرجى ملء الخانات بالأعلى كحساب جديد للتسجيل الفوري داخل التطبيق دون أي متصفح خارجي!
+          </p>
         </div>
       </motion.div>
     </div>
