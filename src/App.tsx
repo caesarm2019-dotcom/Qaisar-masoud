@@ -85,6 +85,64 @@ async function compressImage(base64Str: string, maxWidth = 800, maxHeight = 800,
   });
 }
 
+function playNotificationSound() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc1.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12); // A5
+    
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(1174.66, ctx.currentTime); // D6
+    
+    gain1.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    
+    gain2.gain.setValueAtTime(0.04, ctx.currentTime);
+    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    
+    osc1.start();
+    osc2.start();
+    
+    osc1.stop(ctx.currentTime + 0.5);
+    osc2.stop(ctx.currentTime + 0.35);
+  } catch (e) {
+    console.error("Audio playback error:", e);
+  }
+}
+
+function triggerNativeNotification(title: string, body: string, type?: string) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    try {
+      const notif = new Notification(title, {
+        body: body,
+        icon: '/favicon.ico',
+        tag: type || 'direct',
+        renotify: true
+      } as any);
+      notif.onclick = () => {
+        window.focus();
+      };
+    } catch (e) {
+      console.error("Native notification failed", e);
+    }
+  }
+}
+
 function Toggle({ enabled, onChange, label, description, icon: Icon }: any) {
   return (
     <div className="flex items-center justify-between py-4 border-b border-brand-border/40 last:border-0">
@@ -196,6 +254,26 @@ export default function App() {
   const [ads, setAds] = useState<Ad[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [appInitializing, setAppInitializing] = useState(true);
+
+  useEffect(() => {
+    const minTimer = setTimeout(() => {
+      if (!loading) {
+        setAppInitializing(false);
+      }
+    }, 2500);
+    return () => clearTimeout(minTimer);
+  }, [loading]);
+
+  useEffect(() => {
+    if (!loading) {
+      const waitTimer = setTimeout(() => {
+        setAppInitializing(false);
+      }, 700);
+      return () => clearTimeout(waitTimer);
+    }
+  }, [loading]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [activeCondition, setActiveCondition] = useState<string | null>(null);
@@ -385,7 +463,9 @@ export default function App() {
           });
           setTimeout(() => setToast(null), 6000);
           
-          if ('vibrate' in navigator) navigator.vibrate(50);
+          playNotificationSound();
+          triggerNativeNotification(data.title, data.message, data.type);
+          if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]);
         }
       }
     }, (error) => {
@@ -538,6 +618,9 @@ export default function App() {
             body: payload.notification.body || '' 
           });
           setTimeout(() => setToast(null), 5000);
+          playNotificationSound();
+          triggerNativeNotification(payload.notification.title || 'إشعار جديد', payload.notification.body || '');
+          if ('vibrate' in navigator) navigator.vibrate([100, 50, 100]);
         }
       });
       return () => unsubscribe();
@@ -693,7 +776,78 @@ export default function App() {
 
   // --- UI Renderers ---
   return (
-    <div className="min-h-screen pb-20 flex flex-col w-full bg-white relative overflow-x-hidden">
+    <>
+      <AnimatePresence>
+        {appInitializing && (
+          <motion.div
+            key="app-loading-screensplash"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0, scale: 1.05 }}
+            transition={{ duration: 0.8, ease: [0.19, 1, 0.22, 1] }}
+            className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-gradient-to-b from-[#0d1527] via-[#080d1a] to-[#04060d] text-white p-6 select-none"
+          >
+            <div className="flex flex-col items-center max-w-sm w-full text-center space-y-7">
+              {/* Dynamic Floating Golden Logo Icon */}
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: [0.9, 1.05, 1], opacity: 1 }}
+                transition={{ duration: 1.6, ease: "easeOut", times: [0, 0.6, 1] }}
+                className="relative"
+              >
+                <div className="absolute inset-0 bg-yellow-500/15 blur-3xl rounded-full w-36 h-36 animate-pulse mx-auto -translate-y-4" />
+                <div className="w-24 h-24 bg-gradient-to-br from-amber-400 via-yellow-500 to-amber-600 p-[2px] rounded-3xl shadow-3xl shadow-amber-500/10">
+                  <div className="w-full h-full bg-[#090e1f] rounded-[22px] flex items-center justify-center">
+                    <Sparkles className="w-12 h-12 text-yellow-400 animate-pulse" />
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* Title & Slogan */}
+              <div className="space-y-3.5">
+                <motion.h2 
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.35, duration: 0.8 }}
+                  className="text-4xl lg:text-5xl font-serif font-black tracking-widest bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-transparent"
+                >
+                  سوق الرافدين
+                </motion.h2>
+                
+                <motion.p
+                  initial={{ y: 15, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ delay: 0.55, duration: 0.8 }}
+                  className="text-xs font-serif text-[#94a3b8] tracking-[0.3em] uppercase leading-relaxed font-bold"
+                >
+                  بوابتك الرقمية للبيع والشراء الفوري 🛒
+                </motion.p>
+              </div>
+
+              {/* Indefinite progress line loader */}
+              <div className="w-48 h-[2.5px] bg-white/10 rounded-full overflow-hidden relative mt-2">
+                <motion.div 
+                  initial={{ left: '-100%' }}
+                  animate={{ left: '100%' }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                  className="absolute top-0 bottom-0 w-1/2 bg-gradient-to-r from-transparent via-amber-400 to-transparent"
+                />
+              </div>
+
+              {/* Secure footer text */}
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 0.4 }}
+                transition={{ delay: 1.1, duration: 1 }}
+                className="text-[9px] font-sans tracking-[0.2em] opacity-40 uppercase pt-20"
+              >
+                سياسة البيانات آمنة ومحمية 100% 🇮🇶
+              </motion.p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="min-h-screen pb-20 flex flex-col w-full bg-white relative overflow-x-hidden">
       {/* Header */}
       <header className="sticky top-0 z-30 bg-white border-b border-brand-border px-4 py-3 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
@@ -861,6 +1015,7 @@ export default function App() {
               onViewFavorites={() => setView('favorites')}
               showInstallButton={showInstallButton}
               onInstall={handleInstallClick}
+              setToast={setToast}
             />
           )}
 
@@ -982,6 +1137,7 @@ export default function App() {
         )}
       </AnimatePresence>
     </div>
+    </>
   );
 }
 
@@ -2023,28 +2179,28 @@ function HomeView({
 
           <div>
             {loading ? (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-20">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 lg:gap-8">
                 {[1,2,3,4,5,6,7,8].map(i => (
-                  <div key={i} className="bg-white rounded-[48px] border border-brand-border p-2 transition-all">
-                    <div className="aspect-[4/5] bg-brand-muted animate-pulse rounded-[40px]" />
-                    <div className="p-6 space-y-4">
+                  <div key={i} className="bg-white rounded-[32px] border border-brand-border/60 p-2 transition-all shadow-sm">
+                    <div className="aspect-[4/5] bg-brand-muted animate-pulse rounded-[24px]" />
+                    <div className="p-4 space-y-4">
                       <div className="space-y-2">
                         <div className="h-2 w-12 bg-brand-muted animate-pulse rounded-full" />
-                        <div className="h-6 w-34 bg-brand-muted animate-pulse rounded-full" />
+                        <div className="h-5 w-32 bg-brand-muted animate-pulse rounded-full" />
                       </div>
-                      <div className="pt-4 border-t border-brand-border/60 flex items-center justify-between">
+                      <div className="pt-4 border-t border-brand-border/30 flex items-center justify-between">
                          <div className="space-y-2">
                            <div className="h-2 w-8 bg-brand-muted animate-pulse rounded-full" />
-                           <div className="h-6 w-24 bg-brand-muted animate-pulse rounded-full" />
+                           <div className="h-5 w-20 bg-brand-muted animate-pulse rounded-full" />
                          </div>
-                         <div className="w-10 h-10 bg-brand-muted animate-pulse rounded-full" />
+                         <div className="w-8 h-8 bg-brand-muted animate-pulse rounded-full" />
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
             ) : ads.length > 0 ? (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-20">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 lg:gap-8">
                 {ads.map((ad: Ad, idx: number) => (
                   <motion.div
                     key={`home-ad-${ad.id}`}
@@ -3181,6 +3337,34 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
   const [newPrice, setNewPrice] = useState(ad.price.toString());
   const [isUpdatingPrice, setIsUpdatingPrice] = useState(false);
 
+  // Touch handlers for swipe-to-back
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+  const touchEndX = useRef(0);
+  const touchEndY = useRef(0);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+    touchEndX.current = e.touches[0].clientX;
+    touchEndY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    touchEndX.current = e.touches[0].clientX;
+    touchEndY.current = e.touches[0].clientY;
+  };
+
+  const handleTouchEnd = () => {
+    const diffX = touchEndX.current - touchStartX.current;
+    const diffY = touchEndY.current - touchStartY.current;
+
+    // Swipe exit triggered if largely horizontal swipe of 130px in either direction
+    if (Math.abs(diffX) > 130 && Math.abs(diffY) < 70) {
+      onBack();
+    }
+  };
+
   const isBlocked = blockedUsers?.includes(ad.sellerId);
 
   useEffect(() => {
@@ -3288,8 +3472,25 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 1.02 }}
-      className="bg-brand-bg min-h-screen pb-40"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      className="bg-brand-bg min-h-screen pb-40 select-none relative"
     >
+      {/* Swipe back gesture helper pill */}
+      <div className="absolute top-24 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+        <motion.div 
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: [0, 0.7, 0.7, 0], y: 0 }}
+          transition={{ delay: 1, duration: 4, times: [0, 0.15, 0.85, 1] }}
+          className="flex items-center gap-2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-[10px] font-black tracking-widest text-center shadow-lg border border-white/10"
+        >
+          <span className="animate-bounce">👉</span>
+          <span>اسحب لليمين أو اليسار للعودة للرئيسية</span>
+          <span className="animate-bounce">👈</span>
+        </motion.div>
+      </div>
+
       <AnimatePresence>
         {isFullscreen && (
           <FullScreenGallery 
@@ -3900,8 +4101,24 @@ function VerificationModal({ isOpen, onClose, onVerified }: any) {
 
 function ProfileView({ 
   user, profile, onLogout, onBack, onViewMyAds, onViewNotifications, unreadNotifications, onViewBlocked, blockedUsers, onViewFavorites, 
-  showInstallButton, onInstall 
+  showInstallButton, onInstall, setToast 
 }: any) {
+  const [permissionStatus, setPermissionStatus] = useState<string>(
+    "Notification" in window ? Notification.permission : "unsupported"
+  );
+  const [audioCheckText, setAudioCheckText] = useState('تجربة نغمة الإشارة 🔔');
+  const [vibCheckText, setVibCheckText] = useState('تجربة الاهتزاز 📱');
+
+  const requestPermission = async () => {
+    if (!("Notification" in window)) return;
+    try {
+      const res = await Notification.requestPermission();
+      setPermissionStatus(res);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const [editing, setEditing] = useState(false);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
   const [myAdsCount, setMyAdsCount] = useState(0);
@@ -4270,6 +4487,94 @@ function ProfileView({
       </div>
 
       <div className="space-y-4 px-4 max-w-lg mx-auto w-full">
+        {/* مركز التحكم بالإشعارات ونغمة التنبيه */}
+        <div className="bg-white rounded-3xl p-5 border border-brand-border/60 shadow-sm w-full mb-2 text-right">
+          <div className="flex items-center gap-2 mb-3 pb-3 border-b border-brand-border/40 justify-start flex-row-reverse">
+            <Bell className="w-4 h-4 text-brand-primary animate-pulse" />
+            <h4 className="text-xs font-black uppercase tracking-wider text-brand-primary font-sans">إعدادات الإشعارات والأصوات</h4>
+          </div>
+
+          <div className="space-y-3.5">
+            {/* Permission item */}
+            <div className="flex items-center justify-between p-3 bg-brand-bg rounded-2xl border border-brand-border/20 flex-row-reverse">
+              <div className="text-right">
+                <span className="text-[9px] uppercase font-black tracking-widest text-brand-secondary/55 block">أذونات الهاتف</span>
+                <span className="text-xs font-black text-brand-primary mt-0.5 block">
+                  {permissionStatus === 'granted' ? 'مسموح ومفعّل ✓' : permissionStatus === 'denied' ? '🚫 محظور من الإعدادات' : 'غير مفعّل ⚠'}
+                </span>
+              </div>
+              {permissionStatus !== 'granted' && (
+                <button
+                  type="button"
+                  onClick={requestPermission}
+                  className="px-3.5 py-1.5 text-[10px] font-black uppercase tracking-wider bg-brand-primary text-white rounded-xl shadow-md shrink-0 hover:bg-brand-primary/90 active:scale-95 transition-all"
+                >
+                  تفعيل الإذن
+                </button>
+              )}
+            </div>
+
+            {/* Test buttons */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  playNotificationSound();
+                  setAudioCheckText('تم تشغيل الجرس 🔔');
+                  setTimeout(() => setAudioCheckText('تجربة نغمة الإشارة 🔔'), 1200);
+                }}
+                className="flex flex-col items-center gap-1.5 p-3.5 bg-brand-bg hover:bg-brand-primary/5 hover:border-brand-primary/25 border border-transparent rounded-2xl text-center transition-all active:scale-[0.97]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-brand-primary/5 flex items-center justify-center text-brand-primary">
+                  <Bell className="w-4 h-4 animate-bounce" />
+                </div>
+                <span className="text-[9px] font-black text-brand-primary uppercase tracking-widest">{audioCheckText}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if ('vibrate' in navigator) {
+                    navigator.vibrate([120, 50, 120]);
+                    setVibCheckText('جاري الاهتزاز 📳');
+                    setTimeout(() => setVibCheckText('تجربة الاهتزاز 📱'), 1200);
+                  } else {
+                    setVibCheckText('غير مدعوم ✕');
+                    setTimeout(() => setVibCheckText('تجربة الاهتزاز 📱'), 1200);
+                  }
+                }}
+                className="flex flex-col items-center gap-1.5 p-3.5 bg-brand-bg hover:bg-brand-primary/5 hover:border-brand-primary/25 border border-transparent rounded-2xl text-center transition-all active:scale-[0.97]"
+              >
+                <div className="w-8 h-8 rounded-xl bg-orange-500/5 flex items-center justify-center text-orange-500">
+                  <Zap className="w-4 h-4 animate-pulse" />
+                </div>
+                <span className="text-[9px] font-black text-brand-secondary uppercase tracking-widest">{vibCheckText}</span>
+              </button>
+            </div>
+
+            {/* Send sample action button */}
+            <button
+              type="button"
+              onClick={() => {
+                playNotificationSound();
+                setToast({
+                  title: "تنبيه من سوق العراق",
+                  body: "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100%! 🎉",
+                  type: "system"
+                });
+                triggerNativeNotification(
+                  "تنبيه من سوق العراق",
+                  "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100%! 🎉"
+                );
+                setTimeout(() => setToast(null), 6000);
+              }}
+              className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl shadow-sm text-center active:scale-[0.98] transition-all"
+            >
+              إرسال إشعار تجريبي فوري لشاشة الهاتف 🚀
+            </button>
+          </div>
+        </div>
+
         <MenuButton 
           onClick={onViewNotifications} 
           icon={<Bell className={cn(unreadNotifications > 0 && "text-red-500 fill-red-500")} />} 
