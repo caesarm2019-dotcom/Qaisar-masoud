@@ -2970,11 +2970,62 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
               <path fill="#FBBC05" d="M5.05 10.62a7.12 7.12 0 0 1 0 2.76l-3.92 3.04A11.96 11.96 0 0 1 1.13 7.58l3.92 3.04z" />
               <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.7-2.87c-1.03.69-2.35 1.1-4.26 1.1-3.21 0-6.01-2.38-6.95-5.58H1.13v3.13C3.28 20.33 7.35 23 12 23z" />
             </svg>
-            <span className="text-sm font-bold text-gray-700">دخول بواسطة Google</span>
+            <span className="text-sm font-bold text-gray-700">مزامنة سريعة بواسطة Google</span>
+          </button>
+
+          {/* Golden One-click Quick Demo Account (Solves Capacitor Google Auth restriction) */}
+          <button
+            onClick={async () => {
+              setLoading(true);
+              setErrorMsg('');
+              const demoEmail = "demo@souqiraq.com";
+              const demoPass = "123456";
+              try {
+                await signInWithEmailAndPassword(auth, demoEmail, demoPass);
+                onClose();
+              } catch (signInErr: any) {
+                if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') {
+                  try {
+                    const userCredential = await createUserWithEmailAndPassword(auth, demoEmail, demoPass);
+                    await updateProfile(userCredential.user, {
+                      displayName: "مستكشف تجريبي"
+                    });
+                    const userRef = doc(db, 'users', userCredential.user.uid);
+                    await setDoc(userRef, {
+                      displayName: "مستكشف تجريبي",
+                      email: demoEmail,
+                      createdAt: serverTimestamp(),
+                      uid: userCredential.user.uid,
+                      rating: 5,
+                      reviewsCount: 1,
+                      verifiedSeller: true,
+                      notificationPrefs: {
+                        newListings: true,
+                        priceDrops: true,
+                        messages: true,
+                        offers: true
+                      }
+                    }, { merge: true });
+                    onClose();
+                  } catch (createErr: any) {
+                    setErrorMsg('خطأ أثناء تهيئة الحساب التجريبي: ' + createErr.message);
+                  }
+                } else {
+                  setErrorMsg('بيانات الدخول التجريبي غير صحيحة أو تم حظرها.');
+                }
+              } finally {
+                setLoading(false);
+              }
+            }}
+            type="button"
+            className="w-full py-4 mt-3 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-black rounded-2xl flex items-center justify-center gap-2.5 shadow-md shadow-amber-500/10 active:scale-[0.98] transition-all"
+          >
+            <Sparkles className="w-5 h-5 text-white animate-pulse shrink-0 animate-bounce" />
+            <span className="text-sm">دخول فوري بلمسة واحدة (حساب تجريبي للتطبيق) *</span>
           </button>
           
-          <p className="text-[10px] text-center text-brand-secondary/40 mt-5 leading-normal">
-            إذا كنت تستخدم هاتف أندرويد وتواجه مشكلة في Google، يرجى ملء الخانات بالأعلى كحساب جديد للتسجيل الفوري داخل التطبيق دون أي متصفح خارجي!
+          <p className="text-[10px] text-center text-brand-secondary/50 mt-5 leading-normal">
+            * <strong className="text-brand-primary">ملاحظة لمشتركي الهاتف:</strong> قيود أمان جوجل تمنع فتح النوافذ المنبثقة داخل التطبيق. استخدم <strong>الحساب التجريبي الفوري</strong> أعلاه للتمتع بكافة مزايا التطبيق (المحادثات، كتابة الإعلانات) أو سجل بالبريد يدويّاً!
           </p>
         </div>
       </motion.div>
@@ -4693,11 +4744,17 @@ function NavButton({ icon, label, active, onClick }: any) {
       whileHover={{ scale: 1.05 }}
       whileTap={{ scale: 0.95 }}
       className={cn(
-        "flex flex-col items-center justify-center transition-all relative px-4 py-2 group rounded-xl",
+        "flex flex-col items-center justify-center gap-1 transition-all relative px-3 py-1 group rounded-xl min-w-[64px]",
         active ? "text-brand-primary font-black" : "text-brand-secondary opacity-60 hover:opacity-100"
       )}
     >
-      <span className="text-[11px] uppercase tracking-wider transition-all font-black">{label}</span>
+      <div className={cn(
+        "w-5 h-5 flex items-center justify-center transition-colors",
+        active ? "text-brand-primary" : "text-brand-secondary opacity-50 group-hover:opacity-100"
+      )}>
+        {icon}
+      </div>
+      <span className="text-[10px] uppercase tracking-wider transition-all font-black">{label}</span>
       {active && (
         <motion.div 
           layoutId="nav-pill" 

@@ -22,6 +22,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          # Delete package-lock to avoid platform-specific optional dependency mismatch
           rm -f package-lock.json
           npm install --legacy-peer-deps --include=optional
 
@@ -39,46 +40,38 @@ jobs:
 
       - name: Verify Capacitor Assets Exist
         run: |
+          echo "Verifying Capacitor assets in Android project..."
           if [ ! -f "android/app/src/main/assets/public/index.html" ]; then
-            echo "::error::Capacitor assets missing!"
+            echo "::error::Capacitor assets are missing! index.html was not found in 'android/app/src/main/assets/public'. Please check if 'npm run build' and 'npx cap sync' succeeded."
             exit 1
           fi
+          echo "Capacitor assets successfully verified."
 
-      # 🔥 أهم تعديل هنا
-      - name: Build Android APK + AAB
+      - name: Build Android App (APK & AAB for Google Play)
         run: |
           cd android
           chmod +x gradlew
+          echo "Starting assembleDebug (APK)..."
+          ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m" --no-daemon
+          echo "Starting assembleRelease (APK)..."
+          ./gradlew assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m" --no-daemon
+          echo "Starting bundleRelease (AAB)..."
+          ./gradlew bundleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
-          echo "Building Debug APK..."
-          ./gradlew assembleDebug --no-daemon
-
-          echo "Building Release APK..."
-          ./gradlew assembleRelease --no-daemon
-
-          echo "Building AAB..."
-          ./gradlew bundleRelease --no-daemon
-
-      # 📦 Debug APK
-      - name: Upload Debug APK
+      - name: Upload Debug APK (For Testing)
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
+          name: souq-iraq-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: ignore
 
-      # 📦 Release APK (هذا المهم إلك)
-      - name: Upload Release APK
+      - name: Upload Release APK (For Phone Direct Installation)
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
+          name: souq-iraq-release-apk
           path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: ignore
 
-      # 📦 AAB (للنشر)
-      - name: Upload AAB
+      - name: Upload Release AAB (For Google Play)
         uses: actions/upload-artifact@v4
         with:
-          name: release-aab
+          name: souq-iraq-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
-          if-no-files-found: ignore

@@ -73,8 +73,5 @@
   @apply text-sm leading-relaxed;
 }
 
-/* Premium minimalist mode: hide all Lucide icons while keeping loaders */
-svg.lucide:not(.animate-spin) {
-  display: none !important;
-}
+/* Premium styling for standard responsive layouts */
 
