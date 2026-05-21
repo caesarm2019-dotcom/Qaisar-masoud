@@ -181,13 +181,38 @@ async function startServer() {
       if (response.generatedImages && response.generatedImages.length > 0) {
         const base64Bytes = response.generatedImages[0].image.imageBytes;
         const imageUrl = `data:image/jpeg;base64,${base64Bytes}`;
-        res.json({ imageUrl });
+        res.json({ imageUrl, fallback: false });
       } else {
         throw new Error("No images generated in Response");
       }
     } catch (error) {
-      console.error("Gemini Image Generation Error:", error);
-      res.status(500).json({ error: "Failed to generate realistic product image" });
+      console.warn("Gemini Image Generation Error, falling back to rich curated category placeholder:", error);
+      
+      // Intelligent fallback curation matching typical premium e-commerce categories
+      let fallbackUrl = 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?q=80&w=1200&auto=format&fit=crop'; // Default premium smartphone/office
+      
+      const catLower = (category || '').toLowerCase();
+      const promptLower = (prompt || '').toLowerCase();
+      
+      if (catLower.includes('phone') || catLower.includes('موبايل') || promptLower.includes('ايفون') || promptLower.includes('iphone') || promptLower.includes('هاتف')) {
+        fallbackUrl = 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?q=80&w=1200&auto=format&fit=crop'; // iPhone/Mobile
+      } else if (catLower.includes('car') || catLower.includes('سيار') || catLower.includes('vehicle') || promptLower.includes('سيارة') || promptLower.includes('car')) {
+        fallbackUrl = 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?q=80&w=1200&auto=format&fit=crop'; // Luxury Car
+      } else if (catLower.includes('fashion') || catLower.includes('ملابس') || catLower.includes('clothing') || promptLower.includes('قميص') || promptLower.includes('فستان')) {
+        fallbackUrl = 'https://images.unsplash.com/photo-1483985988355-763728e1935b?q=80&w=1200&auto=format&fit=crop'; // Premium Fashion
+      } else if (catLower.includes('furniture') || catLower.includes('أثاث') || catLower.includes('home') || promptLower.includes('كرسي') || promptLower.includes('طاولة')) {
+        fallbackUrl = 'https://images.unsplash.com/photo-1524758631624-e2822e304c36?q=80&w=1200&auto=format&fit=crop'; // Modern Furniture
+      } else if (catLower.includes('electronic') || catLower.includes('أجهزة') || promptLower.includes('شاشة') || promptLower.includes('tv') || promptLower.includes('كمبيوتر')) {
+        fallbackUrl = 'https://images.unsplash.com/photo-1588508065123-287b28e013da?q=80&w=1200&auto=format&fit=crop'; // Electronics
+      } else if (catLower.includes('watch') || catLower.includes('ساع') || promptLower.includes('ساعة') || promptLower.includes('watch')) {
+        fallbackUrl = 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=1200&auto=format&fit=crop'; // Luxury Watch
+      } else {
+        // Dynamic search seed to ensure rich variety on other products
+        const seedValue = Math.floor(Math.random() * 1000);
+        fallbackUrl = `https://picsum.photos/seed/${seedValue}/1200/1200`;
+      }
+
+      res.json({ imageUrl: fallbackUrl, fallback: true });
     }
   });
 
