@@ -53,6 +53,8 @@ jobs:
           chmod +x gradlew
           echo "Starting assembleDebug (APK)..."
           ./gradlew assembleDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m" --no-daemon
+          echo "Starting assembleRelease (APK)..."
+          ./gradlew assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m" --no-daemon
           echo "Starting bundleRelease (AAB)..."
           ./gradlew bundleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=1024m" --no-daemon
 
@@ -61,6 +63,12 @@ jobs:
         with:
           name: souq-iraq-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Release APK (For Phone Direct Installation)
+        uses: actions/upload-artifact@v4
+        with:
+          name: souq-iraq-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
 
       - name: Upload Release AAB (For Google Play)
         uses: actions/upload-artifact@v4
