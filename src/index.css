@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", serif;
+  
+  --color-brand-primary: #111111;
+  --color-brand-secondary: #666666;
+  --color-brand-bg: #ffffff;
+  --color-brand-border: #f2f2f2;
+  --color-brand-muted: #fafafa;
+  --color-brand-accent: #f5f5f0;
+
+  --shadow-elite: 0 20px 40px -15px rgba(0,0,0,0.1);
+  --shadow-inner-glow: inset 0 0 20px rgba(255,255,255,0.8);
+}
+
+@layer base {
+  body {
+    @apply bg-brand-bg text-brand-primary font-sans antialiased;
+    direction: rtl;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    selection: bg-brand-primary text-white;
+  }
+
+  h1, h2, h3, h4, .font-serif {
+    @apply font-serif;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/70 backdrop-blur-md border border-white/20;
+  }
+  
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .mesh-bg {
+    background-color: #ffffff;
+    background-image: 
+      radial-gradient(at 0% 0%, hsla(253,16%,7%,0.03) 0, transparent 50%), 
+      radial-gradient(at 50% 0%, hsla(225,39%,30%,0.03) 0, transparent 50%), 
+      radial-gradient(at 100% 0%, hsla(339,49%,30%,0.03) 0, transparent 50%);
+  }
+
+  .chat-gradient-me {
+    background: linear-gradient(135deg, #1a1a1a 0%, #000000 100%);
+  }
+
+  .chat-gradient-other {
+    background: linear-gradient(135deg, #ffffff 0%, #f9f9f9 100%);
+  }
+
+  .grainy {
+    position: relative;
+  }
+  .grainy::before {
+    content: "";
+    @apply absolute inset-0 pointer-events-none opacity-[0.03] z-[100];
+    background-image: url("https://grainy-gradients.vercel.app/noise.svg");
+  }
+}
+
+.markdown-body {
+  @apply text-sm leading-relaxed;
+}
+
+/* Premium minimalist mode: hide all Lucide icons while keeping loaders */
+svg.lucide:not(.animate-spin) {
+  display: none !important;
+}
+

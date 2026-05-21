@@ -1,0 +1,17 @@
+{
+  "name": "سوق العراق",
+  "short_name": "سوقنا",
+  "description": "منصة لبيع وشراء الإعلانات في العراق",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#51513d",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3081/3081559.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

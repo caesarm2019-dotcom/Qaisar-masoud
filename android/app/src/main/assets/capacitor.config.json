@@ -1,0 +1,12 @@
+{
+	"appId": "com.souqiraq.app",
+	"appName": "سوق العراق",
+	"webDir": "dist",
+	"bundledWebRuntime": false,
+	"server": {
+		"androidScheme": "https",
+		"allowNavigation": [
+			"ais-pre-wlrbpf7khax3bie5zbm3fy-24605880583.europe-west2.run.app"
+		]
+	}
+}
