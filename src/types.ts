@@ -69,4 +69,6 @@ export interface Message {
   read?: boolean;
   createdAt: any;
   isOptimistic?: boolean;
+  localId?: string;
+  localTimestamp?: number;
 }

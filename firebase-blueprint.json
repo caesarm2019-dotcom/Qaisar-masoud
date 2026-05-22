@@ -116,6 +116,20 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["adId", "createdAt"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "A rating and comments left by a buyer for a seller",
+      "type": "object",
+      "properties": {
+        "reviewerId": { "type": "string", "description": "UID of the user writing the review" },
+        "reviewerName": { "type": "string", "description": "Name of the reviewer" },
+        "reviewerPhoto": { "type": "string", "description": "Photo URL of the reviewer" },
+        "rating": { "type": "number", "minimum": 1, "maximum": 5, "description": "Rating in stars (1-5)" },
+        "comment": { "type": "string", "description": "Written feedback from the reviewer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reviewerId", "reviewerName", "rating", "comment", "createdAt"]
     }
   },
   "firestore": {
@@ -150,6 +164,10 @@
     "/users/{userId}/blocks": {
       "schema": "Block",
       "description": "Users blocked by this user"
+    },
+    "/users/{userId}/reviews": {
+      "schema": "Review",
+      "description": "Reviews left for this seller by other users"
     }
   }
 }

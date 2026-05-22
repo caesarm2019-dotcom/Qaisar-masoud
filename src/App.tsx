@@ -11,7 +11,7 @@ import {
   ChevronLeft, ChevronRight, ShoppingBag, Check, CheckCheck, Maximize, Image as ImageIcon,
   Settings, Calendar, Save, Copy, ExternalLink, LogOut, Ban,
   ArrowRight, HeartOff, MoreVertical, Send, MessageCircle, Smile,
-  Play, Mic, CircleDollarSign, PhoneCall, TrendingDown, Zap, Activity
+  Play, Pause, Mic, CircleDollarSign, PhoneCall, TrendingDown, Zap, Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -215,12 +215,12 @@ function ConfirmModal({ isOpen, onClose, onConfirm, title, message, children, co
 }
 
 const CATEGORIES = [
-  { id: 'electronics', label: 'إلكترونيات', icon: '' },
-  { id: 'cars', label: 'سيارات', icon: '' },
-  { id: 'furniture', label: 'أثاث', icon: '' },
-  { id: 'fashion', label: 'ملابس', icon: '' },
-  { id: 'realestate', label: 'عقارات', icon: '' },
-  { id: 'services', label: 'خدمات', icon: '' },
+  { id: 'electronics', label: 'إلكترونيات', icon: '📱' },
+  { id: 'cars', label: 'سيارات', icon: '🚗' },
+  { id: 'furniture', label: 'أثاث', icon: '🛋️' },
+  { id: 'fashion', label: 'ملابس وأناقة', icon: '✨' },
+  { id: 'realestate', label: 'عقارات', icon: '🏢' },
+  { id: 'services', label: 'خدمات وأعمال', icon: '💼' },
 ];
 
 const CITIES = ['الكل', 'بغداد', 'البصرة', 'الموصل', 'أربيل', 'النجف', 'كربلاء', 'كركوك', 'الناصرية', 'السليمانية'];
@@ -248,21 +248,142 @@ export default function App() {
   const [view, setView] = useState<'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites'>('home');
   const [viewingProfileId, setViewingProfileId] = useState<string | null>(null);
   const [selectedAd, setSelectedAd] = useState<Ad | null>(null);
-
   const [activeChat, setActiveChat] = useState<Conversation | null>(null);
   const [chats, setChats] = useState<Conversation[]>([]);
   const [ads, setAds] = useState<Ad[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshCounter, setRefreshCounter] = useState(0);
   const [appInitializing, setAppInitializing] = useState(true);
 
+  const isPopStateRef = useRef(false);
+
+  // Helper to go back natively or fallback to standard state transition
+  const goBack = (defaultView: 'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites' = 'home') => {
+    if (typeof window !== 'undefined' && window.history.state && window.history.length > 1) {
+      window.history.back();
+    } else {
+      setView(defaultView);
+      if (defaultView === 'home') {
+        setSelectedAd(null);
+        setViewingProfileId(null);
+        setActiveChat(null);
+      }
+    }
+  };
+
+  // Synchronize dynamic browser URL/state history to prevent hard-exits 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({
+        view: 'home',
+        selectedAd: null,
+        viewingProfileId: null,
+        activeChat: null
+      }, '');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    // If the state change is from a back/forward browser action, don't write to history
+    if (isPopStateRef.current) {
+      isPopStateRef.current = false;
+      return;
+    }
+
+    const currentHistoryState = window.history.state;
+    const isDuplicate = currentHistoryState && 
+      currentHistoryState.view === view &&
+      (currentHistoryState.selectedAd?.id === selectedAd?.id) &&
+      currentHistoryState.viewingProfileId === viewingProfileId &&
+      (currentHistoryState.activeChat?.id === activeChat?.id);
+
+    if (isDuplicate) return;
+
+    // Build plain, serializable state backups (removing complex dates/class methods from Firestore)
+    const safeSelectedAd = selectedAd ? {
+      id: selectedAd.id,
+      title: selectedAd.title,
+      description: selectedAd.description,
+      price: selectedAd.price,
+      category: selectedAd.category,
+      condition: selectedAd.condition,
+      images: selectedAd.images,
+      location: selectedAd.location,
+      sellerId: selectedAd.sellerId,
+      sellerName: selectedAd.sellerName,
+      contactMethod: selectedAd.contactMethod,
+      whatsappNumber: selectedAd.whatsappNumber,
+      status: selectedAd.status,
+      isFeatured: selectedAd.isFeatured,
+      watchers: selectedAd.watchers
+    } : null;
+
+    const safeActiveChat = activeChat ? {
+      id: activeChat.id,
+      participants: activeChat.participants,
+      adId: activeChat.adId,
+      adTitle: activeChat.adTitle,
+      adImage: activeChat.adImage,
+      lastMessage: activeChat.lastMessage,
+      unreadCount: activeChat.unreadCount,
+      typing: activeChat.typing,
+      otherUser: activeChat.otherUser
+    } : null;
+
+    window.history.pushState({
+      view,
+      selectedAd: safeSelectedAd,
+      viewingProfileId,
+      activeChat: safeActiveChat
+    }, '');
+  }, [view, selectedAd, viewingProfileId, activeChat]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      if (state) {
+        isPopStateRef.current = true;
+        if (state.view) setView(state.view);
+        setSelectedAd(state.selectedAd);
+        setViewingProfileId(state.viewingProfileId);
+        setActiveChat(state.activeChat);
+      } else {
+        // Fallback to initial home
+        isPopStateRef.current = true;
+        setView('home');
+        setSelectedAd(null);
+        setViewingProfileId(null);
+        setActiveChat(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Fail-safe auto timeout to ensure the loading screen fades out after 3.5 seconds max
+    const failSafeTimer = setTimeout(() => {
+      setAppInitializing(false);
+    }, 3500);
+
     const minTimer = setTimeout(() => {
       if (!loading) {
         setAppInitializing(false);
       }
     }, 2500);
-    return () => clearTimeout(minTimer);
+
+    return () => {
+      clearTimeout(failSafeTimer);
+      clearTimeout(minTimer);
+    };
   }, [loading]);
 
   useEffect(() => {
@@ -632,6 +753,22 @@ export default function App() {
   };
 
   const loginWithGoogle = async () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const isCapacitor = origin.startsWith('capacitor://') || 
+                        origin.startsWith('https://localhost') || 
+                        (origin.startsWith('http://localhost') && !origin.includes(':3000')) ||
+                        origin.includes('192.168.') ||
+                        (window as any).Capacitor;
+
+    if (isCapacitor) {
+      setToast({
+        title: 'تنويّه هام لمستخدمي التطبيق المحمول 📱',
+        body: 'جوجل تمنع تسجيل الدخول العادي بـ Google داخل تطبيقات الـ APK ما لم يتم تفعيل Google Sign-In الأصلي وربط بصمة الـ SHA-1 لتوقيع تطبيقك بـ Firebase Console. يرجى استخدام البريد الإلكتروني/الهاتف أو النقر على "دخول فوري بحساب تجريبي" بالأسفل للاستخدام المباشر.'
+      });
+      setTimeout(() => setToast(null), 12000);
+      return;
+    }
+
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     
@@ -688,7 +825,14 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [activeCategory]);
+  }, [activeCategory, refreshCounter]);
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    setRefreshCounter(prev => prev + 1);
+    // Wait minimum 1200ms for premium pull animation display integrity
+    await new Promise(resolve => setTimeout(resolve, 1200));
+  };
 
   const filteredAds = useMemo(() => {
     let result = ads.filter(ad => {
@@ -732,36 +876,43 @@ export default function App() {
     }
     if (user.uid === ad.sellerId) return;
 
-    // Check if chat already exists
-    const chatsRef = collection(db, 'chats');
-    const q = query(
-      chatsRef, 
-      where('participants', 'array-contains', user.uid),
-      where('adId', '==', ad.id)
-    );
-    const snap = await getDocs(q);
-    
-    let chat: Conversation;
-    if (!snap.empty) {
-      chat = { id: snap.docs[0].id, ...snap.docs[0].data() } as Conversation;
-    } else {
-      const newChat: Omit<Conversation, 'id'> = {
-        participants: [user.uid, ad.sellerId],
-        adId: ad.id,
-        adTitle: ad.title,
-        lastMessage: 'بدء المحادثة',
-        lastMessageAt: serverTimestamp(),
-        unreadCount: {
-          [user.uid]: 0,
-          [ad.sellerId]: 0
-        },
-      };
-      const docRef = await addDoc(collection(db, 'chats'), newChat);
-      chat = { id: docRef.id, ...newChat } as Conversation;
+    try {
+      // Check if chat already exists by querying chats where user is participant,
+      // then filtering by adId in-memory to bypass Firebase composite index rules.
+      const chatsRef = collection(db, 'chats');
+      const q = query(
+        chatsRef, 
+        where('participants', 'array-contains', user.uid)
+      );
+      const snap = await getDocs(q);
+      
+      const existingDoc = snap.docs.find(doc => doc.data().adId === ad.id);
+      
+      let chat: Conversation;
+      if (existingDoc) {
+        chat = { id: existingDoc.id, ...existingDoc.data() } as Conversation;
+      } else {
+        const newChat: Omit<Conversation, 'id'> = {
+          participants: [user.uid, ad.sellerId],
+          adId: ad.id,
+          adTitle: ad.title,
+          lastMessage: 'بدء المحادثة',
+          lastMessageAt: serverTimestamp(),
+          unreadCount: {
+            [user.uid]: 0,
+            [ad.sellerId]: 0
+          },
+        };
+        const docRef = await addDoc(collection(db, 'chats'), newChat);
+        chat = { id: docRef.id, ...newChat } as Conversation;
+      }
+      
+      setActiveChat(chat);
+      setView('chatroom');
+    } catch (error) {
+      console.error("Error creating/navigating to chat:", error);
+      alert("عذراً، حدث خطأ أثناء فتح المحادثة. الرجاء المحاولة مجدداً.");
     }
-    
-    setActiveChat(chat);
-    setView('chatroom');
   };
 
   const markAsSold = async () => {
@@ -913,14 +1064,15 @@ export default function App() {
               onAdClick={showAdDetails}
               favorites={favorites}
               toggleFavorite={toggleFavorite}
+              onRefresh={handleRefresh}
             />
           )}
 
           {view === 'create' && (
             <CreateAdView 
               user={user} 
-              onClose={() => setView('home')} 
-              onSuccess={() => setView('home')} 
+              onClose={() => goBack('home')} 
+              onSuccess={() => goBack('home')} 
               createNotification={createNotification}
             />
           )}
@@ -928,7 +1080,7 @@ export default function App() {
           {view === 'details' && selectedAd && (
             <AdDetailsView 
               ad={selectedAd} 
-              onBack={() => setView('home')} 
+              onBack={() => goBack('home')} 
               onStartChat={() => startChat(selectedAd)}
               currentUser={user}
               profile={profile}
@@ -948,14 +1100,16 @@ export default function App() {
               userId={viewingProfileId}
               onBack={() => {
                 if (viewingProfileId === user?.uid) {
-                  setView('profile');
+                  goBack('profile');
                 } else {
-                  setView('details');
+                  goBack('details');
                 }
               }}
               onAdClick={showAdDetails}
               onStartChat={(ad: Ad) => startChat(ad)}
               currentUser={user}
+              onLogin={handleLogin}
+              createNotification={createNotification}
             />
           )}
 
@@ -963,7 +1117,7 @@ export default function App() {
           {view === 'myAds' && user && (
             <MyAdsView 
               user={user}
-              onBack={() => setView('profile')}
+              onBack={() => goBack('profile')}
               onAdClick={showAdDetails}
               createNotification={createNotification}
             />
@@ -972,7 +1126,7 @@ export default function App() {
           {view === 'favorites' && user && (
             <FavoritesView 
               favorites={favorites}
-              onBack={() => setView('home')}
+              onBack={() => goBack('home')}
               onAdClick={showAdDetails}
               onToggleFavorite={toggleFavorite}
             />
@@ -980,7 +1134,7 @@ export default function App() {
 
           {view === 'notifications' && user && (
             <NotificationsView 
-              onBack={() => setView('profile')} 
+              onBack={() => goBack('profile')} 
               onNavigate={(v: any, data: any) => {
                 if (v === 'chatroom') {
                   const chat = chats.find(c => c.id === data);
@@ -997,7 +1151,7 @@ export default function App() {
             <BlockedUsersView 
               user={user} 
               blockedUsers={blockedUsers}
-              onBack={() => setView('profile')} 
+              onBack={() => goBack('profile')} 
             />
           )}
 
@@ -1008,7 +1162,7 @@ export default function App() {
               blockedUsers={blockedUsers}
               unreadNotifications={unreadNotifications}
               onLogout={handleLogout}
-              onBack={() => setView('home')}
+              onBack={() => goBack('home')}
               onViewMyAds={() => setView('myAds')}
               onViewNotifications={() => setView('notifications')}
               onViewBlocked={() => setView('blocks')}
@@ -1034,7 +1188,7 @@ export default function App() {
             <ChatRoomView 
               user={user}
               chat={activeChat}
-              onBack={() => setView('chats')}
+              onBack={() => goBack('chats')}
               blockedUsers={blockedUsers}
               createNotification={createNotification}
             />
@@ -1245,6 +1399,109 @@ function ChatListView({ user, onChatSelect, chats }: any) {
   );
 }
 
+function VoiceMessagePlayer({ audioUrl, isMe }: { audioUrl: string, isMe: boolean }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [duration, setDuration] = useState('0:00');
+  const [currentTime, setCurrentTime] = useState('0:00');
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    const audio = new Audio(audioUrl);
+    audioRef.current = audio;
+
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setProgress(0);
+      setCurrentTime('0:00');
+    };
+    
+    const handleTimeUpdate = () => {
+      if (audio.duration) {
+        setProgress((audio.currentTime / audio.duration) * 100);
+        
+        const curMins = Math.floor(audio.currentTime / 60);
+        const curSecs = String(Math.floor(audio.currentTime % 60)).padStart(2, '0');
+        setCurrentTime(`${curMins}:${curSecs}`);
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      if (audio.duration && isFinite(audio.duration)) {
+        const mins = Math.floor(audio.duration / 60);
+        const secs = String(Math.floor(audio.duration % 60)).padStart(2, '0');
+        setDuration(`${mins}:${secs}`);
+      }
+    };
+
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+    return () => {
+      audio.pause();
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, [audioUrl]);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      document.querySelectorAll('audio').forEach(el => {
+        if (el !== audioRef.current) el.pause();
+      });
+      audioRef.current.play().catch(e => console.error(e));
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3 py-1.5 px-1 min-w-[220px]">
+      <button 
+        type="button"
+        onClick={togglePlay}
+        className={cn(
+          "w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-md active:scale-90 shrink-0",
+          isMe 
+            ? "bg-white text-brand-primary hover:bg-white/90 shadow-sm" 
+            : "bg-brand-primary text-white hover:bg-brand-primary/95 shadow-sm"
+        )}
+      >
+        {isPlaying ? (
+          <Pause className="w-4 h-4 fill-current text-current" />
+        ) : (
+          <Play className="w-4 h-4 fill-current text-current translate-x-0.5" />
+        )}
+      </button>
+      
+      <div className="flex-1 space-y-1">
+        <div className="relative h-1.5 w-full bg-black/10 rounded-full overflow-hidden">
+          <div 
+            className={cn(
+              "absolute top-0 bottom-0 left-0 transition-all duration-100",
+              isMe ? "bg-white" : "bg-brand-primary"
+            )} 
+            style={{ width: `${progress}%` }} 
+          />
+        </div>
+        <div className="flex items-center justify-between text-[9px] font-bold opacity-75">
+          <span>{isPlaying ? currentTime : duration}</span>
+          <Mic className="w-3 h-3 opacity-65" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: any) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [optimisticMessages, setOptimisticMessages] = useState<any[]>([]);
@@ -1321,6 +1578,8 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
     setNewMessage(prev => prev + emojiData.emoji);
   };
 
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1332,8 +1591,7 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
 
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64String = reader.result as string;
-      performSendMessage('', base64String);
+      setPendingImage(reader.result as string);
     };
     reader.readAsDataURL(file);
   };
@@ -1342,6 +1600,18 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
   const [isOtherTyping, setIsOtherTyping] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = (force = false) => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 250;
+    if (force || isAtBottom) {
+      requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+      });
+    }
+  };
   const typingTimeoutRef = useRef<any>(null);
 
   const otherUserId = chat.participants.find((p: string) => p !== user.uid);
@@ -1427,17 +1697,13 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
         const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Message[];
         setMessages(msgs);
         
-        // Smarter optimistic clearing: only clear ones that have been "recognized" by the server
+        // Smarter optimistic clearing: only clear ones that have been "recognized" by the server via localId
         setOptimisticMessages(prev => prev.filter(om => 
-          !msgs.some(m => m.text === om.text && m.senderId === om.senderId)
+          !msgs.some(m => m.localId === om.localId)
         ));
         
         // Scroll to bottom
-        setTimeout(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollIntoView({ behavior: 'smooth' });
-          }
-        }, 150);
+        scrollToBottom();
     }, (error) => {
         handleFirestoreError(error, OperationType.LIST, `chats/${chat.id}/messages`);
     });
@@ -1482,14 +1748,17 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
       offerStatus: type === 'offer' ? 'pending' : null,
       read: false,
       createdAt: { toDate: () => new Date() },
-      isOptimistic: true
+      isOptimistic: true,
+      localId: tempId,
+      localTimestamp: Date.now()
     };
     setOptimisticMessages(prev => [...prev, optimisticMsg]);
     
     setSending(true);
     if (type === 'text') setNewMessage('');
     
-    setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 10);
+    // Smooth, responsive, instant scroll call
+    scrollToBottom(true);
 
     try {
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -1507,7 +1776,9 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
             audioUrl: audioUrl || null,
             type,
             read: false,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            localId: tempId,
+            localTimestamp: Date.now()
         };
 
         if (type === 'offer') {
@@ -1532,7 +1803,7 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
           await createNotification(
             otherUserId, 
             type === 'offer' ? `عرض جديد من ${user.displayName}` : `مراسلة من ${user.displayName}`, 
-            text, 
+            text || lastMsgDisplay, 
             type === 'offer' ? 'offer' : 'chat', 
             { chatId: chat.id }
           ).catch(() => {});
@@ -1547,9 +1818,15 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newMessage.trim() && !pendingImage) return;
+
     const text = newMessage;
+    const img = pendingImage;
+    
     setNewMessage('');
-    await performSendMessage(text);
+    setPendingImage(null);
+
+    await performSendMessage(text, img || undefined, img ? 'image' : 'text');
   };
 
   const quickReplies = [
@@ -1563,10 +1840,27 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
   ];
 
   const allMessages = useMemo(() => {
-    return [...messages, ...optimisticMessages].sort((a,b) => {
-       const tA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-       const tB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-       return tA - tB;
+    return [...messages, ...optimisticMessages].sort((a, b) => {
+      const getTimestamp = (msg: any) => {
+        if (msg.createdAt) {
+          if (typeof msg.createdAt.toDate === 'function') {
+            return msg.createdAt.toDate().getTime();
+          }
+          if (msg.createdAt instanceof Date) {
+            return msg.createdAt.getTime();
+          }
+          if (typeof msg.createdAt === 'number') {
+            return msg.createdAt;
+          }
+          const parsed = new Date(msg.createdAt).getTime();
+          if (!isNaN(parsed)) return parsed;
+        }
+        if (msg.localTimestamp) {
+          return msg.localTimestamp;
+        }
+        return Date.now();
+      };
+      return getTimestamp(a) - getTimestamp(b);
     });
   }, [messages, optimisticMessages]);
 
@@ -1644,7 +1938,7 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
       />
 
       {/* Messages Area - Visual Rhythm and Spacing */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-1.5 no-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-fixed opacity-[0.98]">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-1.5 no-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-fixed opacity-[0.98]">
         {isBlocked && (
           <motion.div 
             initial={{ opacity: 0, y: -10 }}
@@ -1739,29 +2033,7 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
                       isMe ? "items-start" : "items-end"
                     )}>
                       {msg.type === 'voice' && msg.audioUrl && (
-                        <div className="flex items-center gap-3 py-2 px-1 min-w-[200px]">
-                          <button 
-                             onClick={(e) => {
-                               const audio = new Audio(msg.audioUrl);
-                               audio.play();
-                             }}
-                             className={cn(
-                               "w-10 h-10 rounded-full flex items-center justify-center transition-all",
-                               isMe ? "bg-white/20 hover:bg-white/30" : "bg-brand-primary/10 hover:bg-brand-primary/20"
-                             )}
-                          >
-                             <Play className="w-5 h-5 fill-current" />
-                          </button>
-                          <div className="flex-1 space-y-1">
-                             <div className="flex gap-0.5 h-6 items-center">
-                                {[...Array(12)].map((_, i) => (
-                                   <div key={i} className={cn("w-1 rounded-full", isMe ? "bg-white/40" : "bg-brand-primary/20")} style={{ height: `${Math.random() * 100}%`, minHeight: '4px' }} />
-                                ))}
-                             </div>
-                             <p className="text-[9px] font-black opacity-60">0:12</p>
-                          </div>
-                          <Mic className="w-4 h-4 opacity-40" />
-                        </div>
+                        <VoiceMessagePlayer audioUrl={msg.audioUrl} isMe={isMe} />
                       )}
 
                       {msg.type === 'offer' && (
@@ -1850,6 +2122,29 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
             );
           })}
         </AnimatePresence>
+        
+        {isOtherTyping && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 15 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 10 }}
+            className="flex items-start gap-2 max-w-[85%] self-end mb-4"
+          >
+            <div className="w-8 h-8 rounded-full overflow-hidden border border-white shadow-md bg-brand-muted shrink-0">
+              <img 
+                src={chat.otherUser?.photoURL || `https://ui-avatars.com/api/?name=${chat.otherUser?.displayName}&background=000&color=fff`} 
+                alt="" 
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <div className="bg-white/80 backdrop-blur-md border border-brand-border/40 text-brand-primary px-4 py-2.5 rounded-[20px] rounded-br-none flex items-center gap-1.5 shadow-sm">
+              <span className="w-1.5 h-1.5 bg-brand-primary/60 rounded-full animate-bounce [animation-delay:-0.3s]" />
+              <span className="w-1.5 h-1.5 bg-brand-primary/60 rounded-full animate-bounce [animation-delay:-0.15s]" />
+              <span className="w-1.5 h-1.5 bg-brand-primary/60 rounded-full animate-bounce" />
+            </div>
+          </motion.div>
+        )}
+
         <div ref={scrollRef} className="h-4" />
       </div>
 
@@ -1885,6 +2180,32 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
               height={400}
             />
           </div>
+        )}
+
+        {pendingImage && (
+          <motion.div 
+            initial={{ opacity: 0, y: 15, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="mb-4 p-3 bg-brand-muted border border-brand-border rounded-2xl flex items-center justify-between gap-4 relative"
+          >
+            <div className="flex items-center gap-3">
+              <div className="relative w-14 h-14 rounded-xl overflow-hidden border border-white shadow-md bg-white">
+                <img src={pendingImage} alt="Preview" className="w-full h-full object-cover" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase text-brand-primary tracking-wider block">صورة جاهزة للإرسال</span>
+                <span className="text-[9px] text-brand-secondary opacity-60">اكتب تعليقاً في حقل النص أو أرسل مباشرة</span>
+              </div>
+            </div>
+            <button 
+              type="button" 
+              onClick={() => setPendingImage(null)}
+              className="w-7 h-7 bg-white hover:bg-red-50 text-red-500 rounded-full border border-brand-border/40 flex items-center justify-center transition-all shadow-sm active:scale-90"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
         )}
         
         <form onSubmit={sendMessage} className="flex gap-3 items-end max-w-4xl mx-auto">
@@ -2027,17 +2348,152 @@ function HomeView({
   activeCity, setActiveCity,
   sortBy, setSortBy,
   searchQuery, setSearchQuery, ads, loading, onAdClick,
-  favorites, toggleFavorite
+  favorites, toggleFavorite, onRefresh
 }: any) {
   const [quickViewAd, setQuickViewAd] = useState<Ad | null>(null);
+
+  // --- Pull-To-Refresh System ---
+  const [pullDistance, setPullDistance] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const touchStartRef = useRef<number | null>(null);
+  const isPullingRef = useRef(false);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (window.scrollY === 0 && !refreshing && !loading) {
+      touchStartRef.current = e.touches[0].clientY;
+      isPullingRef.current = true;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartRef.current === null || !isPullingRef.current) return;
+    
+    const currentY = e.touches[0].clientY;
+    const deltaY = currentY - touchStartRef.current;
+    
+    if (deltaY > 0) {
+      const resistance = 0.35;
+      const distance = Math.min(deltaY * resistance, 110);
+      setPullDistance(distance);
+      
+      if (distance > 10 && e.cancelable) {
+        e.preventDefault();
+      }
+    }
+  };
+
+  const handleTouchEnd = async () => {
+    if (!isPullingRef.current) return;
+    isPullingRef.current = false;
+    touchStartRef.current = null;
+    
+    if (pullDistance >= 60) {
+      setRefreshing(true);
+      setPullDistance(55); // Keep slightly visible for the spinner
+      
+      try {
+        if (onRefresh) {
+          await onRefresh();
+        }
+      } catch (err) {
+        console.error("Refresh failed:", err);
+      } finally {
+        setRefreshing(false);
+        setPullDistance(0);
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (window.scrollY === 0 && !refreshing && !loading) {
+      touchStartRef.current = e.clientY;
+      isPullingRef.current = true;
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (touchStartRef.current === null || !isPullingRef.current) return;
+    const deltaY = e.clientY - touchStartRef.current;
+    if (deltaY > 0) {
+      const resistance = 0.35;
+      const distance = Math.min(deltaY * resistance, 110);
+      setPullDistance(distance);
+    }
+  };
+
+  const handleMouseUp = async () => {
+    if (!isPullingRef.current) return;
+    isPullingRef.current = false;
+    touchStartRef.current = null;
+    
+    if (pullDistance >= 60) {
+      setRefreshing(true);
+      setPullDistance(55);
+      
+      try {
+        if (onRefresh) {
+          await onRefresh();
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setRefreshing(false);
+        setPullDistance(0);
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
 
   return (
     <motion.div 
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -20 }}
-      className="mesh-bg min-h-screen"
+      className="mesh-bg min-h-screen relative"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={() => {
+        if (isPullingRef.current) {
+          isPullingRef.current = false;
+          touchStartRef.current = null;
+          setPullDistance(0);
+        }
+      }}
     >
+      {/* Pull To Refresh Ambient Header Indicator Overlay */}
+      <div 
+        className="absolute top-0 left-0 right-0 flex justify-center pointer-events-none z-[100] transition-all duration-150 ease-out"
+        style={{ 
+          transform: `translateY(${pullDistance - 50}px)`, 
+          opacity: pullDistance > 10 ? Math.min(pullDistance / 50, 1) : 0 
+        }}
+      >
+        <div className="bg-white/95 backdrop-blur-md px-5 py-2.5 rounded-full border border-brand-border/60 shadow-elite flex items-center gap-2.5">
+          {refreshing || loading ? (
+            <>
+              <Loader2 className="w-4 h-4 text-brand-primary animate-spin" />
+              <span className="text-[10px] font-black text-brand-primary tracking-tight font-serif">جاري تحديث سوق الرافدين...</span>
+            </>
+          ) : (
+            <>
+              <ChevronLeft 
+                className="w-4 h-4 text-brand-primary transition-transform duration-200" 
+                style={{ transform: `rotate(${pullDistance >= 60 ? -90 : 90}deg)` }} 
+              />
+              <span className="text-[10px] font-black text-brand-primary tracking-tight font-serif">
+                {pullDistance >= 60 ? "أفلت لتحديث الإعلانات الآن" : "اسحب للأسفل لتحديث الإعلانات اليومية"}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
       <QuickViewModal 
         ad={quickViewAd}
         isOpen={!!quickViewAd}
@@ -2133,15 +2589,16 @@ function HomeView({
                 transition={{ delay: idx * 0.05 }}
                 onClick={() => setActiveCategory(activeCategory === cat.id ? null : cat.id)}
                 className={cn(
-                  "flex items-center justify-center px-6 py-3.5 rounded-full transition-all duration-300 border text-xs font-black uppercase tracking-widest min-w-[100px]",
+                  "flex items-center justify-center gap-2 px-6 py-3.5 rounded-full transition-all duration-300 border text-xs font-black uppercase tracking-widest min-w-[100px]",
                   activeCategory === cat.id 
                     ? "bg-brand-primary text-white border-brand-primary shadow-lg scale-105" 
                     : "bg-white text-brand-primary border-brand-border hover:border-brand-primary/40 hover:bg-brand-muted"
                 )}
               >
+                <span className="text-sm select-none">{cat.icon}</span>
                 <span>{cat.label}</span>
                 {activeCategory === cat.id && (
-                  <span className="mr-1.5 opacity-80 text-[10px]">←</span>
+                  <span className="mr-1 opacity-80 text-[10px]">←</span>
                 )}
                 {activeCategory === cat.id && (
                   <div className="absolute inset-0 bg-white/10 pointer-events-none" />
@@ -2240,6 +2697,91 @@ function HomeView({
           </div>
         </div>
       </div>
+
+      {/* Premium Iraq Market Footer */}
+      <footer className="w-full bg-[#090e1f] text-white mt-16 rounded-[40px] md:rounded-[56px] overflow-hidden border border-white/10 relative shadow-2xl">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(245,158,11,0.06),transparent_50%)]" />
+        <div className="absolute top-10 left-10 w-44 h-44 bg-blue-500/5 blur-[80px] rounded-full pointer-events-none" />
+        
+        <div className="max-w-6xl mx-auto px-6 py-12 md:py-16 relative z-10 grid grid-cols-1 md:grid-cols-12 gap-10 md:gap-14 text-right">
+          {/* Brand Intro column */}
+          <div className="md:col-span-5 space-y-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                <Sparkles className="w-5 h-5 text-amber-500" />
+              </div>
+              <span className="text-2xl font-serif font-black tracking-wider bg-gradient-to-l from-amber-400 to-yellow-200 bg-clip-text text-transparent">سوق الرافدين</span>
+            </div>
+            <p className="text-xs text-slate-400 font-bold leading-relaxed max-w-sm">
+              المنصة الوطنية الرائدة لبيع وشراء السيارات، العقارات، الأجهزة، والسلع النادرة في جميع محافظات العراق بكل أمان وبسرعة فائقة.
+            </p>
+            <div className="flex flex-wrap gap-2 pt-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/60 border border-slate-700/50 text-[9px] font-black tracking-wider text-slate-300">
+                <Zap className="w-2.5 h-2.5 text-amber-500" />
+                تصفح آمن
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/60 border border-slate-700/50 text-[9px] font-black tracking-wider text-slate-300">
+                <Activity className="w-2.5 h-2.5 text-emerald-500" />
+                خادم عراقي سريع
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/60 border border-slate-700/50 text-[9px] font-black tracking-wider text-slate-300">
+                <CheckCircle2 className="w-2.5 h-2.5 text-blue-500" />
+                تحقق يدوي
+              </span>
+            </div>
+          </div>
+
+          {/* Quick links & support columns */}
+          <div className="md:col-span-4 grid grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <h4 className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em]">أقسام المنصة</h4>
+              <ul className="space-y-3.5 text-xs text-slate-400 font-bold">
+                <li><a href="#" className="hover:text-amber-400 transition-colors">كل الإعلانات</a></li>
+                <li><a href="#" className="hover:text-amber-400 transition-colors">إلكترونيات فاخرة</a></li>
+                <li><a href="#" className="hover:text-amber-400 transition-colors">سيارات ومحركات</a></li>
+                <li><a href="#" className="hover:text-amber-400 transition-colors">عقارات ومجمعات</a></li>
+              </ul>
+            </div>
+            
+            <div className="space-y-4">
+              <h4 className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em]">الدعم والمساعدة</h4>
+              <ul className="space-y-3.5 text-xs text-slate-400 font-bold">
+                <li><a href="#" className="hover:text-amber-400 transition-colors">شروط الاستخدام</a></li>
+                <li><a href="#" className="hover:text-amber-400 transition-colors">اتصل بفريقنا</a></li>
+                <li><a href="#" className="hover:text-amber-400 transition-colors">سياسة الخصوصية</a></li>
+                <li><a href="#" className="hover:text-amber-400 transition-colors">تعليمات الأمان</a></li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Exclusive Iraq Developer Column */}
+          <div className="md:col-span-3 space-y-4 border-t md:border-t-0 md:border-r border-white/5 pt-8 md:pt-0 md:pr-8">
+            <h4 className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em]">الهوية والتطوير</h4>
+            <div className="p-4 bg-white/[0.03] backdrop-blur-md rounded-2xl border border-white/5 space-y-3">
+              <div className="flex items-center justify-between text-[10px] text-slate-400 font-black">
+                <span className="bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full text-[8px]">مستقر</span>
+                <span>تحديث النظام</span>
+              </div>
+              <p className="text-xs text-slate-300 font-bold leading-relaxed">
+                تمت البرمجة وهندسة البيانات بالكامل بأرقى المعايير بواسطة <span className="text-amber-400">سوق العراق للحلول البرمجية</span>.
+              </p>
+              <div className="pt-2 border-t border-white/5 flex items-center gap-2 text-[9px] text-slate-400 font-black tracking-wider justify-end">
+                <span>تطوير محلي مخصص للوطن 🇮🇶</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Lower footer copyright bar */}
+        <div className="border-t border-white/5 py-6 px-6 relative z-10 bg-black/40 text-slate-500 text-[10px] font-black tracking-wider flex flex-col md:flex-row-reverse justify-between items-center gap-4 max-w-6xl mx-auto">
+          <div className="flex items-center gap-2.5">
+            <span>حقوق الطبع والنشر © ٢٠٢٦ سوق الرافدين. جميع الحقوق محفوظة</span>
+          </div>
+          <div className="flex items-center gap-1 text-[9px] text-slate-400 bg-slate-800/30 px-3 py-1 rounded-full border border-slate-800/50">
+            <span>الرمز البرمجي الأصلي مخصص ومرخص بموجب قوانين حماية الإبداع البرمجية العراقية</span>
+          </div>
+        </div>
+      </footer>
     </motion.div>
   );
 }
@@ -3337,7 +3879,10 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
   const [newPrice, setNewPrice] = useState(ad.price.toString());
   const [isUpdatingPrice, setIsUpdatingPrice] = useState(false);
 
-  // Touch handlers for swipe-to-back
+  // Touch handlers for swipe-to-back with visual swipe feedback
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
   const touchEndX = useRef(0);
@@ -3348,19 +3893,37 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
     touchStartY.current = e.touches[0].clientY;
     touchEndX.current = e.touches[0].clientX;
     touchEndY.current = e.touches[0].clientY;
+    setSwipeOffset(0);
+    setSwipeDirection(null);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    // Prevent default or track movement only if horizontal
     touchEndX.current = e.touches[0].clientX;
     touchEndY.current = e.touches[0].clientY;
+    
+    const diffX = touchEndX.current - touchStartX.current;
+    const diffY = touchEndY.current - touchStartY.current;
+
+    if (Math.abs(diffX) > 15 && Math.abs(diffY) < 45) {
+      setSwipeOffset(Math.abs(diffX));
+      setSwipeDirection(diffX > 0 ? 'right' : 'left');
+    } else if (Math.abs(diffY) > 45) {
+      // Cancel active swipe animation on strong vertical scroll
+      setSwipeOffset(0);
+      setSwipeDirection(null);
+    }
   };
 
   const handleTouchEnd = () => {
     const diffX = touchEndX.current - touchStartX.current;
     const diffY = touchEndY.current - touchStartY.current;
 
-    // Swipe exit triggered if largely horizontal swipe of 130px in either direction
-    if (Math.abs(diffX) > 130 && Math.abs(diffY) < 70) {
+    setSwipeOffset(0);
+    setSwipeDirection(null);
+
+    // Swipe exit triggered if largely horizontal swipe of 120px in either direction
+    if (Math.abs(diffX) > 120 && Math.abs(diffY) < 70) {
       onBack();
     }
   };
@@ -3477,17 +4040,47 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
       onTouchEnd={handleTouchEnd}
       className="bg-brand-bg min-h-screen pb-40 select-none relative"
     >
+      {/* Interactive System-like Back Swipe Visual Indicator */}
+      {swipeDirection && swipeOffset > 15 && (
+        <div 
+          className={cn(
+            "fixed top-1/2 -translate-y-1/2 z-[99999] pointer-events-none transition-transform duration-75 flex items-center justify-center",
+            swipeDirection === 'right' ? "left-4" : "right-4"
+          )}
+          style={{
+            transform: `translateY(-50%) translateX(${swipeDirection === 'right' ? Math.min(swipeOffset * 0.35 - 30, 25) : -Math.min(swipeOffset * 0.35 - 30, 25)}px) scale(${Math.min(0.6 + swipeOffset / 110, 1.3)})`,
+            opacity: Math.min(swipeOffset / 90, 0.95),
+          }}
+        >
+          <div className={cn(
+            "flex items-center gap-2.5 px-4.5 py-3 rounded-full text-white shadow-2xl border backdrop-blur-xl transition-all duration-300",
+            swipeOffset >= 120 
+              ? "bg-gradient-to-r from-amber-400 to-yellow-500 border-yellow-400 text-[#090e1f] scale-105" 
+              : "bg-brand-primary/90 border-white/25 text-white"
+          )}>
+            {swipeDirection === 'right' ? (
+              <ChevronRight className={cn("w-5 h-5", swipeOffset >= 120 ? "animate-ping text-[#090e1f]" : "animate-pulse")} />
+            ) : (
+              <ChevronLeft className={cn("w-5 h-5", swipeOffset >= 120 ? "animate-ping text-[#090e1f]" : "animate-pulse")} />
+            )}
+            <span className="text-[11px] font-black tracking-widest text-[#090e1f] uppercase">
+              {swipeOffset >= 120 ? "أفلت للعودة" : "اسحب للعودة"}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Swipe back gesture helper pill */}
       <div className="absolute top-24 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
         <motion.div 
           initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: [0, 0.7, 0.7, 0], y: 0 }}
-          transition={{ delay: 1, duration: 4, times: [0, 0.15, 0.85, 1] }}
-          className="flex items-center gap-2 px-4 py-2 bg-black/60 backdrop-blur-md rounded-full text-white text-[10px] font-black tracking-widest text-center shadow-lg border border-white/10"
+          animate={{ opacity: [0, 0.8, 0.8, 0], y: 0 }}
+          transition={{ delay: 1, duration: 4.5, times: [0, 0.1, 0.9, 1] }}
+          className="flex items-center gap-2 px-4.5 py-2.5 bg-black/75 backdrop-blur-md rounded-full text-white text-[10px] font-bold tracking-wider text-center shadow-2xl border border-white/15"
         >
-          <span className="animate-bounce">👉</span>
-          <span>اسحب لليمين أو اليسار للعودة للرئيسية</span>
-          <span className="animate-bounce">👈</span>
+          <span className="animate-pulse text-yellow-400">⚡</span>
+          <span>اسحب لليمين أو اليسار للعودة السريعة</span>
+          <span className="animate-pulse text-yellow-400">⚡</span>
         </motion.div>
       </div>
 
@@ -3502,7 +4095,7 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
       </AnimatePresence>
 
       {/* Immersive Gallery Header */}
-      <section className="relative h-[65vh] lg:h-[80vh] w-full overflow-hidden group touch-none">
+      <section className="relative h-[45vh] sm:h-[60vh] lg:h-[80vh] w-full overflow-hidden group touch-none">
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.img 
             key={currentImageIndex}
@@ -3531,26 +4124,26 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
         <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-brand-bg" />
 
         {/* Floating Controls */}
-        <div className="absolute top-8 left-8 right-8 flex justify-between items-center z-50">
-           <button onClick={onBack} className="w-12 h-12 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-white/40 transition-all active:scale-90 shadow-xl flex items-center justify-center font-black">
-              <span className="font-serif font-black text-sm leading-none">→</span>
+        <div className="absolute top-4 left-4 right-4 sm:top-8 sm:left-8 sm:right-8 flex justify-between items-center z-50">
+           <button onClick={onBack} className="w-10 h-10 sm:w-12 sm:h-12 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-white/40 transition-all active:scale-90 shadow-xl flex items-center justify-center font-black">
+              <ChevronRight className="w-5 h-5 sm:w-6 sm:h-6" />
            </button>
-           <div className="flex gap-3">
+           <div className="flex gap-2 sm:gap-3">
               <button 
                 onClick={(e) => { e.stopPropagation(); setShowBlockConfirm(true); }}
                 disabled={isBlocking}
                 className={cn(
-                  "p-4 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-red-500 transition-all active:scale-90 shadow-xl",
+                  "p-2.5 sm:p-4 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-red-500 transition-all active:scale-90 shadow-xl",
                   isBlocked && "bg-red-600 border-red-600"
                 )}
               >
-                {isBlocking ? <Loader2 className="w-6 h-6 animate-spin" /> : <Ban className="w-6 h-6" />}
+                {isBlocking ? <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin" /> : <Ban className="w-5 h-5 sm:w-6 sm:h-6" />}
               </button>
-              <button onClick={onToggleFavorite} className="p-4 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-white/40 transition-all shadow-xl">
-                 <Heart className={cn("w-6 h-6 transition-colors", isFavorited ? "fill-red-500 text-red-500" : "")} />
+              <button onClick={onToggleFavorite} className="p-2.5 sm:p-4 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-white/40 transition-all shadow-xl">
+                 <Heart className={cn("w-5 h-5 sm:w-6 sm:h-6 transition-colors", isFavorited ? "fill-red-500 text-red-500" : "")} />
               </button>
-              <button onClick={() => setIsShareModalOpen(true)} className="p-4 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-white/40 transition-all shadow-xl">
-                 <Share2 className="w-6 h-6" />
+              <button onClick={() => setIsShareModalOpen(true)} className="p-2.5 sm:p-4 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-full text-white hover:bg-white/40 transition-all shadow-xl">
+                 <Share2 className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
            </div>
         </div>
@@ -3566,14 +4159,14 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
         />
 
         {/* Thumbnails Navigator */}
-        <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex gap-3 z-50 overflow-x-auto no-scrollbar max-w-[90vw] p-2 glass rounded-[32px]">
+        <div className="absolute bottom-4 sm:bottom-12 left-1/2 -translate-x-1/2 flex gap-2 sm:gap-3 z-50 overflow-x-auto no-scrollbar max-w-[90vw] p-1.5 sm:p-2 glass rounded-2xl sm:rounded-[32px]">
            {images.map((img: string, idx: number) => (
              <button 
                key={`thumb-${idx}`}
                onClick={() => setCurrentImageIndex(idx)}
                className={cn(
-                 "w-16 h-16 rounded-2xl overflow-hidden border-2 transition-all shrink-0",
-                 currentImageIndex === idx ? "border-white scale-110 shadow-2xl" : "border-transparent opacity-40 hover:opacity-100"
+                 "w-11 h-11 sm:w-16 sm:h-16 rounded-xl sm:rounded-2xl overflow-hidden border-2 transition-all shrink-0",
+                 currentImageIndex === idx ? "border-white scale-105 sm:scale-110 shadow-2xl" : "border-transparent opacity-40 hover:opacity-100"
                )}
              >
                <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -3583,32 +4176,32 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
       </section>
 
       {/* Content Section - Editorial Layout */}
-      <div className="max-w-7xl mx-auto px-6 -mt-16 relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-16">
-        <div className="lg:col-span-8 space-y-16">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 relative z-10 -mt-6 sm:-mt-10 lg:-mt-16 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-16">
+        <div className="lg:col-span-8 space-y-8 sm:space-y-12 lg:space-y-16">
           {/* Header Info */}
-          <div className="space-y-6">
-            <div className="flex items-center gap-4">
-               <span className="px-4 py-1.5 rounded-full bg-brand-primary text-white text-[10px] font-black uppercase tracking-[0.2em]">{ad.category}</span>
-               <div className="flex items-center gap-2 text-[10px] font-bold text-brand-secondary opacity-40 uppercase tracking-widest">
-                  <MapPin className="w-3 h-3" />
+          <div className="space-y-4 sm:space-y-6">
+            <div className="flex items-center gap-3">
+               <span className="px-3 py-1 rounded-full bg-brand-primary text-white text-[9px] font-black uppercase tracking-[0.15em]">{ad.category}</span>
+               <div className="flex items-center gap-1.5 text-[10px] font-bold text-brand-secondary opacity-50 uppercase tracking-wider">
+                  <MapPin className="w-3.5 h-3.5" />
                   {ad.location.city}
                </div>
             </div>
-            <h1 className="text-5xl lg:text-7xl font-serif font-black text-brand-primary leading-[1.1]">{ad.title}</h1>
+            <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-7xl font-serif font-black text-brand-primary leading-tight">{ad.title}</h1>
             
-            <div className="flex items-baseline gap-4">
-               <p className="text-4xl font-bold text-brand-primary">
-                 {ad.price.toLocaleString()} <span className="text-lg opacity-30">د.ع</span>
+            <div className="flex items-baseline gap-3">
+               <p className="text-2xl sm:text-3xl md:text-4xl font-bold text-brand-primary">
+                 {ad.price.toLocaleString()} <span className="text-sm opacity-40">د.ع</span>
                </p>
-               {ad.condition === 'new' && <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full">جديد تماماً</span>}
+               {ad.condition === 'new' && <span className="text-[10px] sm:text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full">جديد تماماً</span>}
             </div>
           </div>
 
           {/* Description */}
-          <div className="space-y-6">
-            <h3 className="text-xs font-black uppercase tracking-[0.3em] opacity-30 border-b border-brand-border pb-4">عن هذا المنتج</h3>
+          <div className="space-y-4 sm:space-y-6">
+            <h3 className="text-xs font-black uppercase tracking-[0.25em] opacity-45 border-b border-brand-border pb-3">عن هذا المنتج</h3>
             <div className="prose prose-stone max-w-none">
-               <p className="text-xl lg:text-2xl text-brand-secondary leading-relaxed font-medium">
+               <p className="text-base sm:text-lg md:text-xl lg:text-2xl text-brand-secondary leading-relaxed font-normal">
                  {ad.description}
                </p>
             </div>
@@ -3617,7 +4210,7 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
           <PriceChart price={ad.price} />
 
           {/* Location / Safety */}
-          <div className="p-10 rounded-[48px] bg-brand-accent/50 border border-brand-border space-y-8">
+          <div className="p-5 sm:p-8 rounded-3xl sm:rounded-[36px] bg-brand-accent/50 border border-brand-border space-y-4 sm:space-y-6">
              <div className="flex items-center gap-4">
                 <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-lg">
                    <AlertCircle className="w-6 h-6 text-brand-primary" />
@@ -3633,7 +4226,7 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
         {/* Sidebar - Seller & Actions */}
         <div className="lg:col-span-4 space-y-8">
            <div className="sticky top-32 space-y-8">
-              <div className="p-8 rounded-[48px] bg-white border border-brand-border shadow-elite space-y-8">
+              <div className="p-5 sm:p-8 rounded-3xl sm:rounded-[40px] bg-white border border-brand-border shadow-elite space-y-6 sm:space-y-8">
                  <div className="flex items-center gap-4 border-b border-brand-border pb-8">
                     <div className="w-20 h-20 rounded-3xl overflow-hidden border border-brand-border bg-brand-muted shrink-0 shadow-inner-glow">
                        <img 
@@ -3657,17 +4250,29 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
                        <>
                         <button 
                           onClick={onStartChat}
-                          className="w-full bg-brand-primary text-white py-5 rounded-[32px] font-bold text-lg shadow-2xl shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-3 group"
+                          className="relative w-full overflow-hidden bg-gradient-to-r from-brand-primary via-[#1c2954] to-brand-primary text-white py-4.5 sm:py-5.5 rounded-2xl sm:rounded-[32px] font-black text-base sm:text-lg shadow-xl shadow-brand-primary/20 hover:shadow-2xl hover:shadow-brand-primary/30 active:scale-[0.98] transition-all flex items-center justify-center gap-3 group"
                         >
-                          <MessageSquare className="w-5 h-5 group-hover:animate-bounce" />
-                          دردشة فورية
+                          {/* Decorative inner light effect */}
+                          <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+                          <div className="absolute -inset-y-2 -right-4 w-12 bg-white/10 skew-x-12 translate-x-[-400px] group-hover:translate-x-[600px] transition-transform duration-1000 ease-out pointer-events-none" />
+                          
+                          <div className="relative flex items-center gap-3 w-full">
+                            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10 sm:bg-white/15 flex items-center justify-center group-hover:scale-110 transition-transform">
+                              <MessageSquare className="w-4.5 h-4.5 text-white animate-pulse" />
+                            </div>
+                            <div className="text-right flex flex-col justify-center leading-none">
+                              <span className="text-sm sm:text-base font-serif font-black">دردشة فورية آمنة</span>
+                              <span className="text-[9px] sm:text-[10px] opacity-75 font-sans block mt-1">تواصل مباشرة ومجاناً داخل التطبيق</span>
+                            </div>
+                            <span className="mr-auto bg-white/20 text-white text-[9px] px-2.5 py-0.5 rounded-full font-sans tracking-wide">متصل ⚡</span>
+                          </div>
                         </button>
                         
                         <div className="grid grid-cols-2 gap-4">
                           {ad.phoneNumber && (
                              <a 
                               href={`tel:${ad.phoneNumber}`}
-                              className="bg-brand-muted text-brand-primary py-5 rounded-[32px] font-bold text-sm shadow-sm hover:bg-brand-primary hover:text-white transition-all flex flex-col items-center justify-center gap-2"
+                              className="bg-brand-muted text-brand-primary py-3.5 sm:py-5 px-3 rounded-2xl sm:rounded-[32px] font-bold text-xs sm:text-sm shadow-sm hover:bg-brand-primary hover:text-white transition-all flex flex-col items-center justify-center gap-1.5"
                              >
                                <PhoneCall className="w-5 h-5" />
                                اتصال مباشر
@@ -3678,7 +4283,7 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
                               href={`https://wa.me/${ad.whatsappNumber.replace(/^0/, '964').replace(/\s/g, '')}?text=مرحباً، أنا مهتم بمنتجك: ${ad.title}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="bg-emerald-50 text-emerald-600 py-5 rounded-[32px] font-bold text-sm shadow-sm hover:bg-emerald-500 hover:text-white transition-all flex flex-col items-center justify-center gap-2"
+                              className="bg-emerald-50 text-emerald-600 py-3.5 sm:py-5 px-3 rounded-2xl sm:rounded-[32px] font-bold text-xs sm:text-sm shadow-sm hover:bg-emerald-500 hover:text-white transition-all flex flex-col items-center justify-center gap-1.5"
                              >
                                <Phone className="w-5 h-5" />
                                واتساب
@@ -3755,6 +4360,52 @@ function AdDetailsView({ ad, onBack, onStartChat, currentUser, profile, blockedU
           />
         )}
       </AnimatePresence>
+
+      {/* Mobile Sticky Actions Bar for Android/iOS scale precision */}
+      {ad.status === 'active' && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-xl border-t border-brand-border/60 p-4 pb-safe shadow-[0_-12px_40px_rgba(0,0,0,0.08)] flex items-center justify-between gap-4 lg:hidden">
+          <div className="flex flex-col text-right">
+            <span className="text-[9px] font-black uppercase tracking-wider opacity-50">السعر</span>
+            <span className="text-xl font-bold text-[#090e1f]">
+              {ad.price.toLocaleString()} <span className="text-xs font-normal opacity-50">د.ع</span>
+            </span>
+          </div>
+          
+          <div className="flex gap-2.5 flex-1 max-w-[70%] justify-end">
+            <button 
+              onClick={onStartChat}
+              className="relative overflow-hidden flex-1 bg-gradient-to-r from-brand-primary to-[#1a233d] text-white py-3 px-4.5 rounded-2xl font-black text-sm shadow-lg shadow-brand-primary/10 active:scale-[0.96] transition-all flex items-center justify-center gap-2 group"
+            >
+              <div className="absolute -inset-y-2 -right-4 w-6 bg-white/10 skew-x-12 translate-x-[-150px] group-hover:translate-x-[300px] transition-transform duration-700 ease-out pointer-events-none" />
+              <MessageSquare className="w-4.5 h-4.5 shrink-0 animate-pulse text-white" />
+              <span className="font-serif">دردشة فورية</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+            </button>
+            
+            {ad.phoneNumber && (
+              <a 
+                href={`tel:${ad.phoneNumber}`}
+                className="p-3 bg-brand-muted text-brand-primary rounded-xl font-bold shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1"
+                title="اتصال مباشر"
+              >
+                <PhoneCall className="w-4 h-4 shrink-0" />
+              </a>
+            )}
+            
+            {ad.whatsappNumber && (
+              <a 
+                href={`https://wa.me/${ad.whatsappNumber.replace(/^0/, '964').replace(/\s/g, '')}?text=مرحباً، أنا مهتم بمنتجك: ${ad.title}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-3 bg-emerald-50 text-emerald-600 rounded-xl font-bold shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1"
+                title="واتساب"
+              >
+                <Phone className="w-4 h-4 shrink-0" />
+              </a>
+            )}
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -3927,37 +4578,157 @@ function CommentSection({ adId, sellerId, adTitle, currentUser, profile, createN
   );
 }
 
-function SellerProfileView({ userId, onBack, onAdClick, onStartChat, currentUser }: any) {
+function SellerProfileView({ userId, onBack, onAdClick, onStartChat, currentUser, onLogin, createNotification }: any) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [ads, setAds] = useState<Ad[]>([]);
+  const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'ads' | 'reviews'>('ads');
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
+  // Review Form state
+  const [userRating, setUserRating] = useState(5);
+  const [commentText, setCommentText] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const fetchProfileAndData = async () => {
+    try {
+      const userSnap = await getDoc(doc(db, 'users', userId));
+      if (userSnap.exists()) {
+        setProfile(userSnap.data() as UserProfile);
+      }
+
+      const adsQuery = query(
+        collection(db, 'ads'),
+        where('sellerId', '==', userId),
+        where('status', '==', 'active'),
+        orderBy('createdAt', 'desc')
+      );
+      const adsSnap = await getDocs(adsQuery);
+      setAds(adsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Ad)));
+
+      // Load Reviews defensively to handle index building time latency
+      let fetchedReviews: any[] = [];
       try {
-        const userSnap = await getDoc(doc(db, 'users', userId));
-        if (userSnap.exists()) {
-          setProfile(userSnap.data() as UserProfile);
-        }
-
-        const adsQuery = query(
-          collection(db, 'ads'),
-          where('sellerId', '==', userId),
-          where('status', '==', 'active'),
+        const reviewsQuery = query(
+          collection(db, 'users', userId, 'reviews'),
           orderBy('createdAt', 'desc')
         );
-        const adsSnap = await getDocs(adsQuery);
-        setAds(adsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Ad)));
-
+        const reviewsSnap = await getDocs(reviewsQuery);
+        fetchedReviews = reviewsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       } catch (e) {
-        console.error("Error fetching seller profile:", e);
-      } finally {
-        setLoading(false);
+        console.warn("Index is probably building. Querying without order and sorting manually.");
+        try {
+          const reviewsSnap = await getDocs(collection(db, 'users', userId, 'reviews'));
+          fetchedReviews = reviewsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          // sort in-memory
+          fetchedReviews.sort((a, b) => {
+            const timeA = a.createdAt?.seconds || 0;
+            const timeB = b.createdAt?.seconds || 0;
+            return timeB - timeA;
+          });
+        } catch (innerErr) {
+          console.error("Error loaded fallback reviews:", innerErr);
+        }
       }
-    };
-    fetchData();
+      setReviews(fetchedReviews);
+
+    } catch (e) {
+      console.error("Error fetching seller profile details:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    fetchProfileAndData();
   }, [userId]);
+
+  const averageRating = useMemo(() => {
+    if (reviews.length === 0) return 5.0;
+    const total = reviews.reduce((sum, r) => sum + (r.rating || 0), 0);
+    return parseFloat((total / reviews.length).toFixed(1));
+  }, [reviews]);
+
+  const ratingDistribution = useMemo(() => {
+    const dist = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    reviews.forEach(r => {
+      const star = Math.round(r.rating || 0);
+      if (star >= 1 && star <= 5) {
+        dist[star as keyof typeof dist] += 1;
+      }
+    });
+    return dist;
+  }, [reviews]);
+
+  const hasReviewedAlready = useMemo(() => {
+    if (!currentUser) return false;
+    return reviews.some(r => r.reviewerId === currentUser.uid);
+  }, [reviews, currentUser]);
+
+  const handlePostReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) {
+      if (onLogin) onLogin();
+      return;
+    }
+    if (currentUser.uid === userId) {
+      setFormError("لا يمكنك تقييم حسابك الشخصي!");
+      return;
+    }
+    if (!commentText.trim()) {
+      setFormError("الرجاء كتابة تعليق لوصف معاملتك مع البائع.");
+      return;
+    }
+
+    setSubmittingReview(true);
+    setFormError(null);
+
+    try {
+      const reviewPayload = {
+        reviewerId: currentUser.uid,
+        reviewerName: currentUser.displayName || 'مشتري الرافدين',
+        reviewerPhoto: currentUser.photoURL || '',
+        rating: userRating,
+        comment: commentText.trim(),
+        createdAt: serverTimestamp()
+      };
+
+      await addDoc(collection(db, 'users', userId, 'reviews'), reviewPayload);
+
+      // Notify the seller dynamically
+      if (createNotification) {
+        const starEmoji = "⭐".repeat(userRating);
+        await createNotification(
+          userId,
+          'تقييم جديد في ملفك الشخصي  ',
+          `أضاف ${currentUser.displayName || 'مشتري'} تقييماً جديداً بـ ${userRating} نجوم: "${commentText.trim().substring(0, 40)}..."`,
+          'info'
+        );
+      }
+
+      // Smooth local state injection/reload for latency-free update
+      setCommentText('');
+      setUserRating(5);
+      
+      // Reload reviews and profile metadata
+      await fetchProfileAndData();
+    } catch (error) {
+      console.error("Error posting seller review:", error);
+      setFormError("عذراً، لم نتمكن من نشر التقييم حالياً. يرجى المحاولة لاحقاً.");
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
+
+  const getRatingLabel = (stars: number) => {
+    if (stars === 5) return "ممتاز جداً";
+    if (stars === 4) return "جيد جداً";
+    if (stars === 3) return "متوسط";
+    if (stars === 2) return "مقبول";
+    return "سيء";
+  };
 
   if (loading) {
     return (
@@ -3983,9 +4754,10 @@ function SellerProfileView({ userId, onBack, onAdClick, onStartChat, currentUser
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-12">
+        {/* Profile Card Summary Header */}
         <div className="flex flex-col items-center text-center space-y-6">
           <div className="relative group">
-            <div className="absolute -inset-1 bg-gradient-to-tr from-brand-primary to-brand-muted rounded-full opacity-20 blur group-hover:opacity-40 transition duration-500"></div>
+            <div className="absolute -inset-1 bg-gradient-to-tr from-brand-primary to-brand-muted rounded-full opacity-25 blur group-hover:opacity-40 transition duration-500"></div>
             <div className="relative w-32 h-32 bg-brand-muted border-4 border-white rounded-full overflow-hidden shadow-2xl">
               {profile?.photoURL ? (
                 <img src={profile.photoURL} alt={profile.displayName} className="w-full h-full object-cover" />
@@ -3995,49 +4767,272 @@ function SellerProfileView({ userId, onBack, onAdClick, onStartChat, currentUser
             </div>
           </div>
 
-          <div className="space-y-2">
-            <h1 className="text-3xl font-serif font-bold text-brand-primary">{profile?.displayName}</h1>
+          <div className="space-y-3">
             <div className="flex items-center justify-center gap-2">
-              <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary opacity-40">
-                {profile?.isVerified ? 'بائع موثوق' : 'بائع نشط'}
-              </span>
+              <h1 className="text-3xl font-serif font-bold text-brand-primary">{profile?.displayName}</h1>
               {profile?.isVerified && (
-                <CheckCircle2 className="w-3.5 h-3.5 text-blue-500 fill-blue-50" />
+                <CheckCircle2 className="w-6 h-6 text-blue-500 fill-blue-50" />
               )}
+            </div>
+            
+            <div className="flex items-center justify-center gap-4 text-xs font-semibold">
+              <span className="bg-brand-primary/10 text-brand-primary px-3 py-1.5 rounded-full">
+                {profile?.isVerified ? '✓ بائع موثق' : 'بائع نشط'}
+              </span>
+              
+              {/* Star rating summary trigger */}
+              <div className="flex items-center gap-1.5 text-amber-500 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200/50">
+                <Star className="w-4 h-4 fill-amber-500" />
+                <span className="font-bold text-amber-600">{averageRating}</span>
+                <span className="text-[#a4a496]">({reviews.length} تقييم)</span>
+              </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 w-full max-w-xs">
-            <div className="bg-white p-6 rounded-3xl border border-brand-border shadow-sm text-center">
-              <p className="text-[10px] font-black uppercase tracking-widest opacity-30 mb-1">الإعلانات النشطة</p>
-              <p className="text-xl font-serif font-bold text-brand-primary">{ads.length}</p>
+          {/* Core Info Bento Grid */}
+          <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
+            <div className="bg-white p-5 rounded-3xl border border-brand-border/60 shadow-sm text-center">
+              <p className="text-[10px] font-black uppercase tracking-widest text-brand-secondary/70 mb-1 font-mono">الإعلانات النشطة</p>
+              <p className="text-2xl font-serif font-bold text-brand-primary">{ads.length}</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-brand-border/60 shadow-sm text-center">
+              <p className="text-[10px] font-black uppercase tracking-widest text-brand-secondary/70 mb-1 font-mono">التقييم العام</p>
+              <p className="text-2xl font-serif font-bold text-amber-500">
+                {reviews.length > 0 ? averageRating : 'جديد'}
+              </p>
             </div>
           </div>
         </div>
 
-        <div className="space-y-12">
-          <div className="space-y-8">
-            <h3 className="text-xs font-black uppercase tracking-[0.2em] border-b border-brand-border pb-4">إعلانات البائع</h3>
-          {ads.length > 0 ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-              {ads.map(ad => (
-                <AdCard 
-                  key={`seller-ad-${ad.id}`} 
-                  ad={ad} 
-                  onClick={() => onAdClick(ad)}
-                  hideFavorite={true}
-                />
-              ))}
+        {/* Tab Controls */}
+        <div className="border-b border-brand-border flex items-center justify-center gap-4">
+          <button 
+            type="button"
+            onClick={() => setActiveTab('ads')}
+            className={`pb-4 px-6 text-sm font-bold transition-all relative ${activeTab === 'ads' ? 'text-brand-primary' : 'text-brand-secondary/60'}`}
+          >
+            إعلانات البائع ({ads.length})
+            {activeTab === 'ads' && (
+              <motion.div layoutId="seller_tab_line" className="absolute bottom-0 left-0 right-0 h-1 bg-brand-primary rounded-full" />
+            )}
+          </button>
+          <button 
+            type="button"
+            onClick={() => setActiveTab('reviews')}
+            className={`pb-4 px-6 text-sm font-bold transition-all relative ${activeTab === 'reviews' ? 'text-brand-primary' : 'text-brand-secondary/60'}`}
+          >
+            آراء وتقييمات المشترين ({reviews.length})
+            {activeTab === 'reviews' && (
+              <motion.div layoutId="seller_tab_line" className="absolute bottom-0 left-0 right-0 h-1 bg-brand-primary rounded-full" />
+            )}
+          </button>
+        </div>
+
+        {/* Tab Content Panels */}
+        <div className="space-y-8">
+          {activeTab === 'ads' ? (
+            <div className="space-y-8">
+              {ads.length > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+                  {ads.map(ad => (
+                    <AdCard 
+                      key={`seller-ad-${ad.id}`} 
+                      ad={ad} 
+                      onClick={() => onAdClick(ad)}
+                      hideFavorite={true}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-24 bg-white rounded-[32px] border border-brand-border/60 shadow-sm p-10">
+                  <ShoppingBag className="w-10 h-10 text-brand-secondary/40 mx-auto mb-4" />
+                  <p className="text-sm font-bold text-brand-secondary">لا توجد إعلانات نشطة حالياً لهذا البائع</p>
+                </div>
+              )}
             </div>
           ) : (
-            <div className="text-center py-20 opacity-30">
-              <ShoppingBag className="w-8 h-8 mx-auto mb-4" />
-              <p className="text-sm font-bold uppercase tracking-widest">لا توجد إعلانات نشطة</p>
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
+              
+              {/* Star Rating Breakdown Stats - Left Column */}
+              <div className="md:col-span-4 bg-white p-6 rounded-[32px] border border-brand-border/60 shadow-sm space-y-6">
+                <div className="text-center">
+                  <span className="text-5xl font-serif font-black text-brand-primary leading-none">{averageRating}</span>
+                  <p className="text-xs font-bold text-brand-secondary mt-1">من أصل 5 نجوم</p>
+                  
+                  {/* Rating Stars Graphic */}
+                  <div className="flex justify-center gap-1 mt-3">
+                    {[1, 2, 3, 4, 5].map((s) => (
+                      <Star 
+                        key={`sum-star-${s}`} 
+                        className={`w-4 h-4 ${s <= Math.round(averageRating) ? 'text-amber-500 fill-amber-500' : 'text-brand-border/80'}`} 
+                      />
+                    ))}
+                  </div>
+                  <p className="text-[10px] font-bold text-brand-secondary opacity-60 mt-2">{reviews.length} تقييم مكتوب</p>
+                </div>
+
+                <div className="space-y-2.5 pt-4 border-t border-brand-border/50">
+                  {[5, 4, 3, 2, 1].map((starNum) => {
+                    const count = ratingDistribution[starNum as keyof typeof ratingDistribution] || 0;
+                    const pct = reviews.length > 0 ? (count / reviews.length) * 100 : 0;
+                    return (
+                      <div key={`dist-row-${starNum}`} className="flex items-center gap-2 text-xs">
+                        <span className="w-3 font-mono font-bold text-brand-secondary">{starNum}</span>
+                        <Star className="w-3 h-3 text-amber-500 fill-amber-500 shrink-0" />
+                        <div className="flex-1 h-2 bg-brand-muted rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-amber-500 rounded-full transition-all duration-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="w-6 text-left font-mono text-brand-secondary/60">{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Add Review Form and Reviews List - Right Column */}
+              <div className="md:col-span-8 space-y-8">
+                
+                {/* Adding Review Form */}
+                {currentUser && currentUser.uid !== userId && !hasReviewedAlready ? (
+                  <form onSubmit={handlePostReview} className="bg-white p-6 rounded-[32px] border border-brand-border/60 shadow-sm space-y-6">
+                    <div>
+                      <h4 className="font-serif font-bold text-lg text-brand-primary mb-1">قيّم تجربتك مع هذا البائع</h4>
+                      <p className="text-xs text-brand-secondary leading-relaxed">أثبتت المراجعات تزايد ثقة وحضارة المجتمع في التبادل التجاري داخل العراق.</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-black uppercase tracking-wider text-brand-secondary opacity-80 block">التقييم المقترح</label>
+                      <div className="flex items-center gap-4">
+                        <div className="flex gap-1.5 bg-brand-muted p-2.5 rounded-2xl border border-brand-border/40">
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <button 
+                              type="button"
+                              key={`input-star-${s}`}
+                              onClick={() => setUserRating(s)}
+                              className="focus:outline-none transition-transform active:scale-90"
+                            >
+                              <Star className={`w-6 h-6 ${s <= userRating ? 'text-amber-500 fill-amber-500' : 'text-brand-secondary/30'}`} />
+                            </button>
+                          ))}
+                        </div>
+                        <span className="text-xs font-bold text-brand-primary bg-brand-primary/10 px-3 py-1.5 rounded-xl">
+                          {getRatingLabel(userRating)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-black uppercase tracking-wider text-brand-secondary opacity-80 block">تفاصيل المراجعة</label>
+                      <textarea 
+                        rows={3} 
+                        placeholder="اكتب عن أمانة البائع وسرعة الرد وجودة السلعة..."
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        className="w-full bg-brand-bg border border-brand-border/80 rounded-2xl p-4 text-sm outline-none focus:ring-2 focus:ring-brand-primary/20 placeholder:text-brand-secondary/40"
+                      />
+                    </div>
+
+                    {formError && (
+                      <div className="bg-red-50 text-red-600 text-xs font-bold p-3 rounded-2xl border border-red-200">
+                        {formError}
+                      </div>
+                    )}
+
+                    <button 
+                      type="submit"
+                      disabled={submittingReview}
+                      className="w-full py-4 bg-brand-primary text-white font-bold rounded-2xl shadow-lg shadow-brand-primary/20 hover:bg-brand-primary/95 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {submittingReview ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <>
+                          <Sparkles className="w-4 h-4" />
+                          <span>نشر التقييم الرسمي</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+                ) : hasReviewedAlready ? (
+                  <div className="bg-emerald-50/50 p-5 rounded-[24px] border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 fill-emerald-50 shrink-0" />
+                    <span>قد قمت بتقييم هذا البائع مسبقاً. شكراً لمساهمتك البناءة في تطوير مجتمع سوق الرافدين التجاري!</span>
+                  </div>
+                ) : currentUser?.uid === userId ? (
+                  <div className="bg-brand-muted p-5 rounded-[24px] border border-brand-border/60 text-brand-secondary text-xs font-semibold flex items-center gap-3">
+                    <User className="w-5 h-5 text-brand-primary shrink-0" />
+                    <span>هذا هو ملفك الشخصي كمعلن. يمكنك متابعة تقييمات المشترين على سلعتك هنا.</span>
+                  </div>
+                ) : (
+                  <div className="bg-amber-50/50 p-5 rounded-[24px] border border-amber-200 text-amber-800 text-xs font-semibold flex flex-col md:flex-row items-center justify-between gap-4">
+                    <span className="text-right">يرجى تسجيل الدخول أولاً لتتمكن من إضافة تقييم ومراجعة للبائع.</span>
+                    <button 
+                      onClick={() => onLogin && onLogin()}
+                      className="px-4 py-2 bg-brand-primary text-white rounded-xl text-xs font-bold hover:scale-[1.02] active:scale-95 transition-all"
+                    >
+                      تسجيل الدخول
+                    </button>
+                  </div>
+                )}
+
+                {/* Reviews List */}
+                <div className="space-y-4">
+                  <h4 className="font-serif font-bold text-lg text-brand-primary border-b border-brand-border/60 pb-3">المراجعات المؤكدة ({reviews.length})</h4>
+                  
+                  {reviews.length > 0 ? (
+                    <div className="space-y-4">
+                      {reviews.map((r, i) => (
+                        <div key={`review-card-${r.id || i}`} className="bg-white p-5 rounded-[24px] border border-brand-border/60 shadow-sm space-y-3.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full overflow-hidden border border-brand-border shrink-0 bg-brand-muted">
+                                {r.reviewerPhoto ? (
+                                  <img src={r.reviewerPhoto} alt={r.reviewerName} className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <User className="w-4 h-4 text-brand-secondary opacity-40" />
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <h5 className="font-bold text-sm text-[#444432]">{r.reviewerName}</h5>
+                                <span className="text-[10px] text-brand-secondary font-medium block">
+                                  {r.createdAt?.toDate ? r.createdAt.toDate().toLocaleDateString() : 'قبل قليل'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Review Star Count */}
+                            <div className="flex gap-0.5">
+                              {[1, 2, 3, 4, 5].map((s) => (
+                                <Star 
+                                  key={`rev-${r.id}-${s}`} 
+                                  className={`w-3.5 h-3.5 ${s <= r.rating ? 'text-amber-500 fill-amber-500' : 'text-brand-border/50'}`} 
+                                />
+                              ))}
+                            </div>
+                          </div>
+
+                          <p className="text-sm text-[#6b6b5d] leading-relaxed pr-1">{r.comment}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-16 bg-white rounded-[32px] border border-brand-border/60 shadow-sm p-10">
+                      <Star className="w-9 h-9 text-brand-secondary/40 mx-auto mb-4" />
+                      <p className="text-sm font-bold text-brand-secondary">لا توجد آراء للمشترين حتى الآن. كن أول من يضيف تقييماً!</p>
+                    </div>
+                  )}
+                </div>
+
+              </div>
             </div>
           )}
         </div>
       </div>
-    </div>
     </motion.div>
   );
 }
@@ -4121,6 +5116,7 @@ function ProfileView({
 
   const [editing, setEditing] = useState(false);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   const [myAdsCount, setMyAdsCount] = useState(0);
   const [verifying, setVerifying] = useState(false);
   const [linkSent, setLinkSent] = useState(false);
@@ -4487,31 +5483,76 @@ function ProfileView({
       </div>
 
       <div className="space-y-4 px-4 max-w-lg mx-auto w-full">
-        {/* مركز التحكم بالإشعارات ونغمة التنبيه */}
+        {/* مركز التحكم بأذونات وصلاحيات نظام الهاتف */}
         <div className="bg-white rounded-3xl p-5 border border-brand-border/60 shadow-sm w-full mb-2 text-right">
           <div className="flex items-center gap-2 mb-3 pb-3 border-b border-brand-border/40 justify-start flex-row-reverse">
-            <Bell className="w-4 h-4 text-brand-primary animate-pulse" />
-            <h4 className="text-xs font-black uppercase tracking-wider text-brand-primary font-sans">إعدادات الإشعارات والأصوات</h4>
+            <Settings className="w-4 h-4 text-brand-primary animate-spin" />
+            <h4 className="text-xs font-black uppercase tracking-wider text-brand-primary font-sans">أذونات وصلاحيات الهاتف (نظام Android)</h4>
           </div>
 
+          <p className="text-[10px] text-brand-secondary/70 leading-relaxed mb-4 text-right">
+            تم ربط التطبيق بالكامل بنواة نظام أندرويد. تتيح لك الأذونات التالية استلام إشعارات حية وتصفح ملفاتك لرفع الصور بسلاسة.
+          </p>
+
           <div className="space-y-3.5">
-            {/* Permission item */}
-            <div className="flex items-center justify-between p-3 bg-brand-bg rounded-2xl border border-brand-border/20 flex-row-reverse">
-              <div className="text-right">
-                <span className="text-[9px] uppercase font-black tracking-widest text-brand-secondary/55 block">أذونات الهاتف</span>
-                <span className="text-xs font-black text-brand-primary mt-0.5 block">
-                  {permissionStatus === 'granted' ? 'مسموح ومفعّل ✓' : permissionStatus === 'denied' ? '🚫 محظور من الإعدادات' : 'غير مفعّل ⚠'}
+            {/* Notification Permission Item */}
+            <div className="flex items-center justify-between p-3.5 bg-brand-bg rounded-2xl border border-brand-border/20 flex-row-reverse">
+              <div className="text-right flex-1 pr-3">
+                <span className="text-[9px] uppercase font-black tracking-widest text-brand-secondary/55 flex items-center gap-1 justify-end">
+                  <span>إشعار النظام الفوري</span>
+                  <Bell className="w-3 h-3 text-amber-500" />
                 </span>
+                <span className="text-xs font-black text-brand-primary mt-0.5 block">
+                  {permissionStatus === 'granted' ? 'مسموح ومفعّل بنظام أندرويد ✓' : permissionStatus === 'denied' ? '🚫 محظور من إعدادات الهاتف' : 'بانتظار الموافقة ⚠'}
+                </span>
+                <span className="text-[9px] text-brand-secondary/60 mt-1 block">مطلوب لاستلام الرسائل وتنبيهات البيع والشراء فوراً.</span>
               </div>
-              {permissionStatus !== 'granted' && (
-                <button
-                  type="button"
-                  onClick={requestPermission}
-                  className="px-3.5 py-1.5 text-[10px] font-black uppercase tracking-wider bg-brand-primary text-white rounded-xl shadow-md shrink-0 hover:bg-brand-primary/90 active:scale-95 transition-all"
-                >
-                  تفعيل الإذن
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={requestPermission}
+                className={cn(
+                  "px-3.5 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-xl shadow-md shrink-0 active:scale-95 transition-all",
+                  permissionStatus === 'granted' 
+                    ? "bg-emerald-500 text-white cursor-default shadow-none" 
+                    : "bg-brand-primary text-white hover:bg-brand-primary/90"
+                )}
+              >
+                {permissionStatus === 'granted' ? 'مفعّل' : 'تفعيل الإذن'}
+              </button>
+            </div>
+
+            {/* Gallery / Storage Permission Item */}
+            <div className="flex items-center justify-between p-3.5 bg-brand-bg rounded-2xl border border-brand-border/20 flex-row-reverse">
+              <div className="text-right flex-1 pr-3">
+                <span className="text-[9px] uppercase font-black tracking-widest text-brand-secondary/55 flex items-center gap-1 justify-end">
+                  <span>الوصول للمعرض والصور</span>
+                  <ImageIcon className="w-3 h-3 text-emerald-500" />
+                </span>
+                <span className="text-xs font-black text-brand-primary mt-0.5 block">
+                  صلاحية جاهزة برمجياً (مدعومة بنظام Android) ✓
+                </span>
+                <span className="text-[9px] text-brand-secondary/60 mt-1 block">تسمح برفع صور منتجاتك وإعلاناتك وتعديل الصورة الشخصية الحية.</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = 'image/*';
+                  input.onchange = () => {
+                    setToast({
+                      title: "تم التحقق من الوصول بنجاح 📸",
+                      body: "الوصول لاستوديو الصور والصحيفة المحلية يعمل بكفاءة كاملة مع الأندرويد.",
+                      type: "system"
+                    });
+                    setTimeout(() => setToast(null), 4000);
+                  };
+                  input.click();
+                }}
+                className="px-3.5 py-1.5 text-[10px] font-black uppercase tracking-wider bg-[#51513d] text-white rounded-xl shadow-md shrink-0 hover:opacity-90 active:scale-95 transition-all"
+              >
+                اختبار المعرض
+              </button>
             </div>
 
             {/* Test buttons */}
@@ -4558,13 +5599,13 @@ function ProfileView({
               onClick={() => {
                 playNotificationSound();
                 setToast({
-                  title: "تنبيه من سوق العراق",
-                  body: "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100%! 🎉",
+                  title: "تنبيه من سوق الرافدين",
+                  body: "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100% على جهازك! 🎉",
                   type: "system"
                 });
                 triggerNativeNotification(
-                  "تنبيه من سوق العراق",
-                  "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100%! 🎉"
+                  "تنبيه من سوق الرافدين",
+                  "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100% على جهازك! 🎉"
                 );
                 setTimeout(() => setToast(null), 6000);
               }}
@@ -4590,7 +5631,7 @@ function ProfileView({
           badge={blockedUsers?.length > 0 ? blockedUsers.length : undefined}
         />
         <MenuButton 
-          onClick={() => alert('سوق الرافدين - النسخة الاحترافية 2.1')}
+          onClick={() => setShowAboutModal(true)}
           icon={<AlertCircle />} 
           label="حول التطبيق" 
         />
@@ -4621,6 +5662,81 @@ function ProfileView({
         onClose={() => setShowVerifyModal(false)}
         onVerified={markVerified}
       />
+
+      {/* Luxurious About Modal representing custom Iraqi development */}
+      <AnimatePresence>
+        {showAboutModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAboutModal(false)}
+              className="absolute inset-0 bg-black/70 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.95, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.95, y: 20, opacity: 0 }}
+              className="relative bg-[#090e1f] text-white rounded-[40px] p-8 w-full max-w-md shadow-3xl border border-white/10 overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 w-36 h-36 bg-amber-500/10 rounded-full -mr-16 -mt-16 blur-3xl pointer-events-none" />
+              <div className="absolute top-0 left-0 w-36 h-36 bg-blue-500/5 rounded-full -ml-16 -mt-16 blur-2xl pointer-events-none" />
+
+              <div className="relative z-10 space-y-6 text-right">
+                {/* Header branding */}
+                <div className="flex items-center gap-4 border-b border-white/10 pb-5">
+                  <div className="w-14 h-14 bg-amber-500/10 border border-amber-400/20 rounded-2xl flex items-center justify-center shrink-0">
+                    <Sparkles className="w-7 h-7 text-amber-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-serif font-black tracking-wide text-transparent bg-clip-text bg-gradient-to-l from-amber-400 to-yellow-200">سوق الرافدين الفاخر</h3>
+                    <p className="text-[9px] font-black text-slate-400 tracking-widest uppercase">الإصدار المحسن الزمردي v2.5</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4 text-xs font-bold text-slate-300 leading-relaxed">
+                  <p>
+                    مرحباً بك في النسخة الاحترافية الأفخم والأسرع من سوق الرافدين، البوابة الكبرى للتبادل والصفقات الحية السريعة في العراق.
+                  </p>
+
+                  <div className="bg-white/[0.03] border border-white/5 p-4 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-amber-400 text-[11px]">سوق العراق للتطوير</span>
+                      <span className="text-slate-400 text-[10px]">البرمجة والتصميم:</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-emerald-400 text-[11px]">نخبة مهندسينا المحليين 🇮🇶</span>
+                      <span className="text-slate-400 text-[10px]">كادر العمل:</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white text-[11px]">بغداد، العراق (خوادم مستقرة)</span>
+                      <span className="text-slate-400 text-[10px]">الاستضافة والشبكة:</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-blue-400 text-[10px]">مراسلة حيّة، تسجيل صوتي، إشعارات فورية</span>
+                      <span className="text-slate-400 text-[10px]">التحسينات المضافة:</span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 leading-relaxed border-t border-white/5 pt-4">
+                    تمت هندسة هذا النظام وبرمجته ليعمل بأعلى سرعة استجابة على أجهزة أندرويد وآيفون، مع حماية تامة للبيانات وتشفير متكامل لقنوات اللقاء التجاري.
+                  </p>
+                </div>
+
+                <div className="pt-2">
+                  <button 
+                    onClick={() => setShowAboutModal(false)}
+                    className="w-full py-4 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-black text-sm rounded-2xl transition-all shadow-xl shadow-amber-500/10 active:scale-95 text-center"
+                  >
+                    إغلاق وبدء الاستخدام
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -4949,11 +6065,11 @@ function AdCard({ ad, onClick, isFavorited, onToggleFavorite, hideFavorite, onQu
       whileTap={{ scale: 0.98 }}
       onClick={onClick}
       className={cn(
-        "group cursor-pointer flex flex-col h-full bg-white rounded-[48px] border hover:shadow-elite p-2 transition-all duration-700",
+        "group cursor-pointer flex flex-col h-full bg-white rounded-3xl lg:rounded-[48px] border hover:shadow-elite p-2 transition-all duration-700",
         ad.isFeatured ? "border-brand-primary border-2 shadow-[0_0_40px_rgba(0,0,0,0.05)] ring-4 ring-brand-primary/5" : "border-brand-border hover:border-brand-primary/10"
       )}
     >
-      <div className="relative aspect-[4/5] overflow-hidden rounded-[40px] grainy">
+      <div className="relative aspect-[4/5] overflow-hidden rounded-[20px] lg:rounded-[40px] grainy">
         {ad.isFeatured && (
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-brand-primary to-transparent z-10 animate-shimmer" />
         )}

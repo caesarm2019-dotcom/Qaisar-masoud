@@ -74,6 +74,16 @@ service cloud.firestore {
         && (data.createdAt == request.time || !data.keys().hasAll(['createdAt']));
     }
 
+    function isValidReview(data) {
+      return data.keys().hasAll(['reviewerId', 'reviewerName', 'reviewerPhoto', 'rating', 'comment', 'createdAt'])
+        && data.reviewerId == request.auth.uid
+        && data.reviewerName is string && data.reviewerName.size() <= 100
+        && data.reviewerPhoto is string && data.reviewerPhoto.size() <= 500
+        && data.rating is number && data.rating >= 1 && data.rating <= 5
+        && data.comment is string && data.comment.size() <= 1000
+        && data.createdAt == request.time;
+    }
+
     // Collection Rules
     match /ads/{adId} {
       allow get: if true;
@@ -125,6 +135,14 @@ service cloud.firestore {
         allow create: if isSignedIn() && request.auth.uid == userId 
           && incoming().blockedUserId is string && incoming().createdAt == request.time;
         allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create: if isSignedIn() 
+          && userId != request.auth.uid
+          && isValidReview(incoming());
+        allow delete: if isAdmin() || (isSignedIn() && existing().reviewerId == request.auth.uid);
       }
     }
 
