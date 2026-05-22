@@ -30,19 +30,110 @@ import {
 import { auth, db, handleFirestoreError, OperationType, messaging, getToken, onMessage } from './lib/firebase';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const isCapacitorPlatform = () => {
+  return typeof window !== 'undefined' && (window as any).Capacitor;
+};
+
+async function requestNativeNotificationPermission() {
+  if (isCapacitorPlatform()) {
+    try {
+      const perm = await LocalNotifications.checkPermissions();
+      if (perm.display !== 'granted') {
+        await LocalNotifications.requestPermissions();
+      }
+    } catch (e) {
+      console.log('Capacitor local notification permissions not requested or supported:', e);
+    }
+  } else if (typeof window !== 'undefined' && "Notification" in window) {
+    try {
+      await Notification.requestPermission();
+    } catch (e) {
+      console.log('Web Notification permissions request not allowed in this iframe/environment:', e);
+    }
+  } else {
+    console.log('Notification API is not supported in this browser.');
+  }
+}
+
+async function triggerNativeNotification(title: string, body: string, type?: string) {
+  // 1. Handle Capacitor / Native Android APK Background Notification
+  if (isCapacitorPlatform()) {
+    try {
+      const perm = await LocalNotifications.checkPermissions();
+      if (perm.display === 'granted') {
+        await LocalNotifications.schedule({
+          notifications: [
+            {
+              title: title,
+              body: body,
+              id: Math.floor(Math.random() * 1000000),
+              schedule: { at: new Date(Date.now() + 50) },
+              sound: undefined,
+              attachments: [],
+              actionTypeId: "",
+              extra: { type: type || 'direct' }
+            }
+          ]
+        });
+        return;
+      }
+    } catch (e) {
+      console.log("Capacitor native notification fell back safely", e);
+    }
+  }
+
+  // 2. Handle HTML5 PWA ServiceWorker (Highly robust for PWA/Mobile Chrome/WebView Background)
+  if (typeof window !== 'undefined' && "Notification" in window && Notification.permission === "granted") {
+    if ("serviceWorker" in navigator) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        if (registration) {
+          registration.showNotification(title, {
+            body: body,
+            icon: 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png',
+            tag: type || 'direct',
+            renotify: true,
+            vibrate: [100, 50, 100],
+            badge: 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png',
+            data: { url: window.location.origin }
+          } as any);
+          return;
+        }
+      } catch (swErr) {
+        console.log("ServiceWorker background notification skipped or unsupported here:", swErr);
+      }
+    }
+
+    // 3. Fallback to standard local Notification UI
+    try {
+      const notif = new Notification(title, {
+        body: body,
+        icon: 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png',
+        tag: type || 'direct',
+        renotify: true
+      } as any);
+      notif.onclick = () => {
+        window.focus();
+      };
+    } catch (e) {
+      console.log("Standard native notification skipped or blocked in this context", e);
+    }
+  }
+}
+
 const getApiUrl = (path: string) => {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const isCapacitor = origin.startsWith('capacitor://') || 
-                      (origin.startsWith('http://localhost') && !origin.includes(':3000')) ||
-                      origin.includes('192.168.') ||
-                      (window as any).Capacitor;
-  
-  if (isCapacitor) {
+  const isCap = origin.startsWith('capacitor://') || 
+                (origin.startsWith('http://localhost') && !origin.includes(':3000')) ||
+                origin.includes('192.168.') ||
+                (window as any).Capacitor;
+  if (isCap) {
     return `https://ais-pre-wlrbpf7khax3bie5zbm3fy-24605880583.europe-west2.run.app${path}`;
   }
   return path;
@@ -124,23 +215,27 @@ function playNotificationSound() {
   }
 }
 
-function triggerNativeNotification(title: string, body: string, type?: string) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "granted") {
-    try {
-      const notif = new Notification(title, {
-        body: body,
-        icon: '/favicon.ico',
-        tag: type || 'direct',
-        renotify: true
-      } as any);
-      notif.onclick = () => {
-        window.focus();
-      };
-    } catch (e) {
-      console.error("Native notification failed", e);
-    }
-  }
+function ScreenHeader({ title, subtitle, onBack, action }: { title: string; subtitle?: string; onBack?: () => void; action?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between mb-8 pb-4 border-b border-brand-border/40">
+      <div className="flex items-center gap-3">
+        {onBack && (
+          <motion.button 
+            whileTap={{ scale: 0.95 }}
+            onClick={onBack} 
+            className="p-2 bg-brand-muted hover:bg-brand-border/40 border border-brand-border/60 rounded-xl text-brand-primary transition-all duration-300 cursor-pointer"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </motion.button>
+        )}
+        <div className="text-right">
+          <h2 className="text-xl font-serif font-bold text-brand-primary tracking-tight leading-none">{title}</h2>
+          {subtitle && <p className="text-[10px] text-brand-secondary opacity-60 font-medium tracking-wide mt-1.5">{subtitle}</p>}
+        </div>
+      </div>
+      {action && <div className="shrink-0">{action}</div>}
+    </div>
+  );
 }
 
 function Toggle({ enabled, onChange, label, description, icon: Icon }: any) {
@@ -257,6 +352,57 @@ export default function App() {
   const [appInitializing, setAppInitializing] = useState(true);
 
   const isPopStateRef = useRef(false);
+
+  // Keep navigation details in a ref to bypass closure stumbles in Capacitor back-button callback
+  const navStateRef = useRef({ view, selectedAd, viewingProfileId, activeChat });
+  useEffect(() => {
+    navStateRef.current = { view, selectedAd, viewingProfileId, activeChat };
+  }, [view, selectedAd, viewingProfileId, activeChat]);
+
+  // Handle Capacitor app-level Back Button specifically for Android APK/AAB installation
+  useEffect(() => {
+    let active = true;
+    let listenerHandle: any = null;
+
+    const setupCapacitorBack = async () => {
+      const isCapacitor = typeof window !== 'undefined' && (window as any).Capacitor;
+      if (!isCapacitor) return;
+
+      try {
+        const { App } = await import('@capacitor/app');
+        if (!active) return;
+
+        listenerHandle = await App.addListener('backButton', () => {
+          const state = navStateRef.current;
+          
+          // Check if we are at the homepage with no details/chat modules overlaid
+          const isAtHomeBase = state.view === 'home' && 
+                               !state.selectedAd && 
+                               !state.viewingProfileId && 
+                               !state.activeChat;
+
+          if (isAtHomeBase) {
+            // Safe system exit if they press Back while fully at Home Screen
+            App.exitApp();
+          } else {
+            // Naturally bubble back inside history states
+            window.history.back();
+          }
+        });
+      } catch (err) {
+        console.error("Capacitor BackButton Listener initialization error:", err);
+      }
+    };
+
+    setupCapacitorBack();
+
+    return () => {
+      active = false;
+      if (listenerHandle) {
+        listenerHandle.remove();
+      }
+    };
+  }, []);
 
   // Helper to go back natively or fallback to standard state transition
   const goBack = (defaultView: 'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites' = 'home') => {
@@ -706,7 +852,7 @@ export default function App() {
         }
 
         // --- FCM Registration ---
-        if (messaging) {
+        if (messaging && typeof window !== 'undefined' && 'Notification' in window) {
           try {
             const permission = await Notification.requestPermission();
             if (permission === 'granted') {
@@ -719,7 +865,7 @@ export default function App() {
               }
             }
           } catch (error) {
-            console.error('Notification error:', error);
+            console.log('Notification registration did not run because of environment restrictions:', error);
           }
         }
       } else {
@@ -766,7 +912,7 @@ export default function App() {
         body: 'جوجل تمنع تسجيل الدخول العادي بـ Google داخل تطبيقات الـ APK ما لم يتم تفعيل Google Sign-In الأصلي وربط بصمة الـ SHA-1 لتوقيع تطبيقك بـ Firebase Console. يرجى استخدام البريد الإلكتروني/الهاتف أو النقر على "دخول فوري بحساب تجريبي" بالأسفل للاستخدام المباشر.'
       });
       setTimeout(() => setToast(null), 12000);
-      return;
+      throw new Error('CAPACITOR_GOOGLE_AUTH_BLOCKED');
     }
 
     const provider = new GoogleAuthProvider();
@@ -998,7 +1144,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <div className="min-h-screen pb-20 flex flex-col w-full bg-white relative overflow-x-hidden">
+      <div className="min-h-screen pb-20 flex flex-col w-full bg-brand-bg relative overflow-x-hidden">
       {/* Header */}
       <header className="sticky top-0 z-30 bg-white border-b border-brand-border px-4 py-3 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
@@ -1251,7 +1397,7 @@ export default function App() {
             initial={{ opacity: 0, y: -20, x: '-50%' }}
             animate={{ opacity: 1, y: 0, x: '-50%' }}
             exit={{ opacity: 0, y: -20, x: '-50%' }}
-            className="fixed top-20 left-1/2 z-[60] w-[calc(100%-2rem)] max-w-sm"
+            className="fixed top-20 left-1/2 z-[200] w-[calc(100%-2rem)] max-w-sm"
           >
             <div 
               onClick={() => {
@@ -2367,15 +2513,12 @@ function HomeView({
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (touchStartRef.current === null || !isPullingRef.current) return;
-    
     const currentY = e.touches[0].clientY;
     const deltaY = currentY - touchStartRef.current;
-    
     if (deltaY > 0) {
       const resistance = 0.35;
       const distance = Math.min(deltaY * resistance, 110);
       setPullDistance(distance);
-      
       if (distance > 10 && e.cancelable) {
         e.preventDefault();
       }
@@ -2386,11 +2529,9 @@ function HomeView({
     if (!isPullingRef.current) return;
     isPullingRef.current = false;
     touchStartRef.current = null;
-    
     if (pullDistance >= 60) {
       setRefreshing(true);
-      setPullDistance(55); // Keep slightly visible for the spinner
-      
+      setPullDistance(55);
       try {
         if (onRefresh) {
           await onRefresh();
@@ -2423,35 +2564,15 @@ function HomeView({
     }
   };
 
-  const handleMouseUp = async () => {
-    if (!isPullingRef.current) return;
-    isPullingRef.current = false;
-    touchStartRef.current = null;
-    
-    if (pullDistance >= 60) {
-      setRefreshing(true);
-      setPullDistance(55);
-      
-      try {
-        if (onRefresh) {
-          await onRefresh();
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setRefreshing(false);
-        setPullDistance(0);
-      }
-    } else {
-      setPullDistance(0);
-    }
+  const handleMouseUp = () => {
+    handleTouchEnd();
   };
 
   return (
     <motion.div 
-      initial={{ opacity: 0, x: 20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -20 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
       className="mesh-bg min-h-screen relative"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -2509,52 +2630,52 @@ function HomeView({
         }}
       />
       {/* Creative Hero Section */}
-      <section className="relative pt-12 pb-20 px-6 overflow-hidden">
-        <div className="max-w-6xl mx-auto relative z-10 space-y-12">
-          <div className="flex flex-col items-center text-center space-y-6">
+      <section className="relative pt-8 pb-10 px-4 sm:px-6 overflow-hidden">
+        <div className="max-w-5xl mx-auto relative z-10 space-y-6">
+          <div className="flex flex-col items-center text-center space-y-3">
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
+              initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.8, ease: "easeOut" }}
-              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-primary/5 border border-brand-primary/10 text-[9px] font-black uppercase tracking-[0.3em] text-brand-primary/60"
+              transition={{ duration: 0.6, ease: "easeOut" }}
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-primary/5 border border-brand-primary/10 text-[9px] font-black uppercase tracking-[0.2em] text-brand-primary/60"
             >
-              <Sparkles className="w-3 h-3" />
-              الجيل الجديد من البيع والشراء
+              <Sparkles className="w-3 h-3 text-brand-primary/60" />
+              منصة البيع والشراء العصرية المبتكرة
             </motion.div>
             
-            <h2 className="text-5xl lg:text-8xl font-serif font-black tracking-tighter text-brand-primary leading-[1.1] max-w-4xl">
-               سوق <span className="italic underline decoration-brand-primary/10 transition-all hover:decoration-brand-primary/40 cursor-default">الرافدين</span> يعيد صياغة التميز.
+            <h2 className="text-2xl sm:text-4xl lg:text-5xl font-serif font-black tracking-tight text-brand-primary leading-tight max-w-3xl">
+               سوق <span className="italic underline decoration-brand-primary/10 transition-all hover:decoration-brand-primary/30 cursor-default">الرافدين</span> للأثاث والأجهزة وكل شيء
             </h2>
             
-            <p className="text-brand-secondary font-medium max-w-lg leading-relaxed text-sm lg:text-base opacity-70">
-              منصة عراقية تجمع بين الحداثة والبساطة. ابحث عن نوادرك، أو اعرض ما تملك بأناقة تليق بك.
+            <p className="text-brand-secondary/70 font-medium max-w-md leading-relaxed text-xs sm:text-sm">
+              الخيار الأول في العراق لتسوق الإعلانات المبوبة بكل سلاسة وموثوقية في بيئة هادئة ومميزة.
             </p>
 
-            <div className="relative w-full max-w-2xl mx-auto group">
-              <div className="absolute inset-0 bg-brand-primary/5 blur-3xl rounded-full scale-110 opacity-50 group-focus-within:opacity-100 transition-opacity" />
-              <div className="relative glass rounded-[32px] p-2 flex items-center gap-2 shadow-elite transition-all focus-within:shadow-2xl">
-                <Search className="mr-6 text-brand-secondary w-5 h-5 opacity-40 group-focus-within:opacity-100 transition-opacity" />
+            <div className="relative w-full max-w-lg mx-auto group mt-2">
+              <div className="absolute inset-0 bg-brand-primary/5 blur-2xl rounded-full scale-105 opacity-40 group-focus-within:opacity-80 transition-opacity" />
+              <div className="relative bg-white/80 backdrop-blur-md border border-brand-border rounded-xl p-1.5 flex items-center gap-1.5 shadow-[0_4px_20px_rgb(0,0,0,0.02)] transition-all focus-within:border-brand-primary/20">
+                <Search className="mr-3 text-brand-secondary w-4 h-4 opacity-40 shrink-0" />
                 <input 
                   type="text" 
-                  placeholder="ابحث عن هاتف، سيارة، أو أثاث فاخر..." 
+                  placeholder="ابحث عن هاتف، سيارة، أو أثاث..." 
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 bg-transparent border-none py-4 pr-2 pl-4 text-lg font-medium focus:ring-0 outline-none placeholder:text-brand-secondary/40"
+                  className="flex-1 bg-transparent border-none py-2 pr-1 pl-3 text-xs sm:text-sm font-medium focus:ring-0 outline-none placeholder:text-brand-secondary/40 text-right text-brand-primary"
                 />
-                <button className="bg-brand-primary text-white p-4 rounded-2xl shadow-xl shadow-brand-primary/20 hover:scale-105 active:scale-95 transition-all">
-                  <ArrowRight className="w-6 h-6 rotate-180" />
+                <button className="bg-brand-primary text-white p-2 rounded-lg hover:scale-105 active:scale-95 transition-all shrink-0 cursor-pointer">
+                  <ArrowRight className="w-4 h-4 rotate-180" />
                 </button>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap justify-center items-center gap-3">
+          <div className="flex flex-wrap justify-center items-center gap-2 sm:gap-3 mt-4">
              <div className="relative">
-               <MapPin className="absolute right-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-primary opacity-40 pointer-events-none" />
+               <MapPin className="absolute right-3.5 top-1/2 -translate-y-1/2 w-3 h-3 text-brand-primary opacity-40 pointer-events-none" />
                <select 
                  value={activeCity || 'الكل'}
                  onChange={(e) => setActiveCity(e.target.value)}
-                 className="appearance-none bg-white/50 backdrop-blur-md border border-brand-border pr-10 pl-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-tighter text-brand-primary outline-none focus:border-brand-primary/20 transition-all cursor-pointer hover:bg-white"
+                 className="appearance-none bg-white border border-brand-border pr-8 pl-5 py-1.5 sm:py-2 rounded-xl text-[10px] font-black uppercase tracking-tighter text-brand-primary outline-none focus:border-brand-primary/20 transition-all cursor-pointer hover:bg-brand-muted"
                >
                  {CITIES.map(city => (
                    <option key={city} value={city}>{city === 'الكل' ? 'كل العراق' : city}</option>
@@ -2562,15 +2683,15 @@ function HomeView({
                </select>
              </div>
              
-             <div className="h-8 w-[1px] bg-brand-border mx-2 hidden md:block" />
+             <div className="h-6 w-[1px] bg-brand-border mx-1 hidden sm:block" />
              <FilterBadge label="جديد" active={activeCondition === 'new'} onClick={() => setActiveCondition(activeCondition === 'new' ? null : 'new')} icon={<CheckCircle2 className="w-3 h-3" />} />
              <FilterBadge label="الأعلى سعراً" active={sortBy === 'price_desc'} onClick={() => setSortBy(sortBy === 'price_desc' ? 'newest' : 'price_desc')} icon={<Star className="w-3 h-3" />} />
           </div>
         </div>
 
         {/* Decorative Mesh Elements */}
-        <div className="absolute top-0 right-0 w-[40vw] h-[40vw] bg-brand-accent/30 blur-[120px] rounded-full -mr-[20vw] -mt-[10vw]" />
-        <div className="absolute bottom-0 left-0 w-[30vw] h-[30vw] bg-brand-accent/20 blur-[100px] rounded-full -ml-[15vw] -mb-[10vw]" />
+        <div className="absolute top-0 right-0 w-[30vh] h-[30vh] bg-brand-accent/20 blur-[100px] rounded-full -mr-[15vh] -mt-[5vh] pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-[20vh] h-[20vh] bg-brand-accent/15 blur-[80px] rounded-full -ml-[10vh] -mb-[5vh] pointer-events-none" />
       </section>
 
       <div className="max-w-7xl mx-auto space-y-24 px-6 pb-32">
@@ -3658,7 +3779,17 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
 
           {/* Social Sign In (For Web Users) */}
           <button
-            onClick={onGoogleLogin}
+            onClick={async () => {
+              try {
+                await onGoogleLogin();
+              } catch (err: any) {
+                if (err.message === 'CAPACITOR_GOOGLE_AUTH_BLOCKED') {
+                  setErrorMsg('⚠️ قوقل تمنع تسجيل الدخول عبر الويب بـ Google في الـ APK ما لم تفعل تسجيل الدخول الأصلي بالبصمة في وحدة تحكم Firebase. نوصي باستخدام البريد الإلكتروني/الهاتف أو زر "حساب تجريبي" بالأسفل للدخول الفوري!');
+                } else {
+                  setErrorMsg('فشل تسجيل الدخول باستخدام حساب Google، يرجى المحاولة لاحقاً.');
+                }
+              }
+            }}
             type="button"
             className="w-full py-4 border-2 border-brand-border hover:bg-brand-muted hover:border-brand-primary/30 transition-all rounded-2xl flex items-center justify-center gap-2.5 active:scale-[0.98]"
           >
@@ -5099,18 +5230,18 @@ function ProfileView({
   showInstallButton, onInstall, setToast 
 }: any) {
   const [permissionStatus, setPermissionStatus] = useState<string>(
-    "Notification" in window ? Notification.permission : "unsupported"
+    typeof window !== 'undefined' && "Notification" in window ? Notification.permission : "unsupported"
   );
   const [audioCheckText, setAudioCheckText] = useState('تجربة نغمة الإشارة 🔔');
   const [vibCheckText, setVibCheckText] = useState('تجربة الاهتزاز 📱');
 
   const requestPermission = async () => {
-    if (!("Notification" in window)) return;
+    if (typeof window === 'undefined' || !("Notification" in window)) return;
     try {
       const res = await Notification.requestPermission();
       setPermissionStatus(res);
     } catch (err) {
-      console.error(err);
+      console.log('Notification permission request not available:', err);
     }
   };
 
@@ -5373,6 +5504,51 @@ function ProfileView({
                 notificationPrefs: { ...formData.notificationPrefs, offers: val }
               })}
             />
+
+            {/* Native / APK Notification Testing area */}
+            <div className="pt-4 border-t border-brand-border/40">
+              <h4 className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-1">إشعارات خلفية الهاتف (APK / PWA)</h4>
+              <p className="text-[10px] text-brand-secondary opacity-70 leading-relaxed mb-4">
+                تتيح لك هذه الميزة استقبال الإشعارات مباشرة على شريط إشعارات الهاتف حتى لو كان التطبيق مغلقاً أو يعمل في الخلفية كلياً مثل تطبيق الواتساب.
+              </p>
+              
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await requestNativeNotificationPermission();
+                    await triggerNativeNotification(
+                      "تم تفعيل إشعارات الهاتف بنجاح! 🔔",
+                      "من الآن فصاعداً ستصلك التنبيهات والرسائل الجديدة هنا في الخلفية مثل واتساب."
+                    );
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-primary text-white dark:bg-white dark:text-black hover:opacity-90 font-bold rounded-2xl text-xs transition-all cursor-pointer"
+                >
+                  <Bell className="w-4 h-4" />
+                  طلب الإذن وإرسال إشعار فوري
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setToast({
+                      title: "⏳ تم جدولة الإشعار الخلفي",
+                      body: "يرجى الخروج من التطبيق الآن أو قفل شاشة الهاتف لتجربة وصوله بعد 5 ثوانٍ."
+                    });
+                    setTimeout(async () => {
+                      await triggerNativeNotification(
+                        "تذكير من سوق الرافدين 📬",
+                        "لديك رسالة معلقة وتنبيه جديد بخصوص عروض الشراء!"
+                      );
+                    }, 5000);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-muted text-brand-primary hover:bg-brand-border/40 font-bold rounded-2xl text-xs border border-brand-border transition-all cursor-pointer"
+                >
+                  <Zap className="w-4 h-4" />
+                  تجربة إشعار في الخلفية (بعد 5 ثوانٍ)
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white p-6 rounded-3xl border border-brand-border space-y-6">
