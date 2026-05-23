@@ -65,7 +65,7 @@
   .grainy::before {
     content: "";
     @apply absolute inset-0 pointer-events-none opacity-[0.03] z-[100];
-    background-image: url("https://grainy-gradients.vercel.app/noise.svg");
+    background-image: url("https://www.image2url.com/r2/default/images/1779573166298-d0e2f7db-86ea-4389-8a3c-a2cee9eda52d.svg");
   }
 }
 
