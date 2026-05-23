@@ -19,6 +19,7 @@ export interface Ad {
   createdAt: any;
   status: 'active' | 'sold' | 'deleted';
   isFeatured?: boolean;
+  isSubscribed?: boolean;
   watchers?: string[];
 }
 

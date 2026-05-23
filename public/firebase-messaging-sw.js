@@ -16,10 +16,18 @@ const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Received background message ', payload);
-  const notificationTitle = payload.notification.title;
+  const notificationTitle = payload.notification?.title || 'إشعار سوق العراق';
   const notificationOptions = {
-    body: payload.notification.body,
-    icon: '/logo.png' 
+    body: payload.notification?.body || '',
+    icon: '/logo.png',
+    vibrate: [500, 200, 500, 200, 500, 200, 500, 200, 500], // Slower, repeated pulsing vibration mapping a realistic ring
+    sound: 'default', // standard standard notification sound
+    tag: payload.data?.type || 'direct_msg',
+    renotify: true,
+    data: {
+      type: payload.data?.type || 'direct_msg',
+      url: '/'
+    }
   };
 
   self.registration.showNotification(notificationTitle, notificationOptions);

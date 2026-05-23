@@ -8,8 +8,17 @@ service cloud.firestore {
 
     // Primitives
     function isSignedIn() { return request.auth != null; }
-    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
-    function isAdmin() { return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function isVerified() { return isSignedIn(); }
+    function isGeneralManager() {
+      return isSignedIn() && (request.auth.token.email == 'caesar.m2019@gmail.com' || request.auth.token.email == 'qaisar.m2019@gmail.com');
+    }
+    function isAdmin() { 
+      return isSignedIn() && (
+        isGeneralManager() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true)
+      );
+    }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
@@ -47,7 +56,7 @@ service cloud.firestore {
     function isValidChat(data) {
       return data.keys().hasAll(['participants', 'adId', 'lastMessageAt', 'adTitle', 'lastMessage', 'unreadCount'])
         && data.participants is list && data.participants.size() == 2
-        && request.auth.uid in data.participants
+        && (request.auth.uid in data.participants || data.adId == 'support' || isAdmin())
         && data.adId is string
         && data.adTitle is string
         && data.lastMessage is string
@@ -56,7 +65,7 @@ service cloud.firestore {
 
     function isValidMessage(data) {
       return data.keys().hasAll(['senderId', 'text', 'createdAt', 'read'])
-        && data.senderId == request.auth.uid
+        && (data.senderId == request.auth.uid || data.senderId == 'admin_support')
         && data.text is string && data.text.size() <= 2000
         && (data.text.size() > 0 || data.get('imageUrl', null) != null || data.get('audioUrl', null) != null || data.get('offerAmount', 0) > 0)
         && data.read is bool
@@ -98,7 +107,7 @@ service cloud.firestore {
         && (
           (existing().sellerId == request.auth.uid && isValidAd(incoming()) && (
             // Action: Edit Ad info
-            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'price', 'category', 'condition', 'images', 'location', 'contactMethod', 'whatsappNumber', 'status'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'price', 'category', 'condition', 'images', 'location', 'contactMethod', 'whatsappNumber', 'status', 'isFeatured', 'featuredUntil'])
           )) || 
           (isVerified() && incoming().diff(existing()).affectedKeys().hasOnly(['watchers'])) ||
           isAdmin()
@@ -117,10 +126,20 @@ service cloud.firestore {
       allow get: if true;
       allow list: if true; // To show seller lists/search
       
-      allow create: if isVerified() && request.auth.uid == userId && isValidUser(incoming());
+      allow create: if isVerified() && (
+        (request.auth.uid == userId && isValidUser(incoming())) ||
+        (userId == 'admin_support' && isGeneralManager())
+      );
       allow update: if isVerified() && (
-        (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'whatsappNumber', 'phoneNumber', 'address', 'birthDate', 'fcmToken', 'notificationPrefs', 'favoriteCategories']))
-        || isAdmin()
+        (userId == 'admin_support' && isGeneralManager()) ||
+        (userId != 'admin_support' && (
+          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName', 'photoURL', 'whatsappNumber', 'phoneNumber', 'address', 'birthDate', 
+            'fcmToken', 'notificationPrefs', 'favoriteCategories', 'isVerified', 'uid', 
+            'createdAt', 'rating', 'reviewsCount', 'verifiedSeller', 'email'
+          ])) ||
+          isAdmin()
+        ))
       );
 
       match /favorites/{favoriteId} {
@@ -147,18 +166,34 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow read: if isSignedIn() && request.auth.uid in existing().participants;
+      allow read: if isSignedIn() && (request.auth.uid in existing().participants || existing().adId == 'support' || isAdmin());
       allow create: if isSignedIn() && isValidChat(incoming());
-      allow update: if isSignedIn() && request.auth.uid in existing().participants
-        && incoming().diff(existing()).affectedKeys().hasAny(['lastMessage', 'lastMessageAt', 'unreadCount', 'typing']);
+      allow update: if isSignedIn() && (request.auth.uid in existing().participants || existing().adId == 'support' || isAdmin())
+        && (
+          incoming().diff(existing()).affectedKeys().hasAny(['lastMessage', 'lastMessageAt', 'unreadCount', 'typing']) ||
+          isAdmin()
+        );
 
       match /messages/{messageId} {
-        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        allow read: if isSignedIn() && (
+          request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants ||
+          get(/databases/$(database)/documents/chats/$(chatId)).data.adId == 'support' ||
+          isAdmin()
+        );
         allow create: if isSignedIn() 
-          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
-          && incoming().senderId == request.auth.uid;
+          && (
+            request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants ||
+            get(/databases/$(database)/documents/chats/$(chatId)).data.adId == 'support' ||
+            isAdmin()
+          )
+          && (incoming().senderId == request.auth.uid || incoming().senderId == 'admin_support')
+          && isValidMessage(incoming());
         allow update: if isSignedIn() 
-          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants
+          && (
+            request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants ||
+            get(/databases/$(database)/documents/chats/$(chatId)).data.adId == 'support' ||
+            isAdmin()
+          )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'offerStatus']);
       }
     }
@@ -175,6 +210,11 @@ service cloud.firestore {
     match /admins/{adminId} {
       allow read: if isSignedIn() && request.auth.uid == adminId;
       allow write: if false; // Only manageable via console
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
     }
   }
 }

@@ -11,12 +11,13 @@ import {
   ChevronLeft, ChevronRight, ShoppingBag, Check, CheckCheck, Maximize, Image as ImageIcon,
   Settings, Calendar, Save, Copy, ExternalLink, LogOut, Ban,
   ArrowRight, HeartOff, MoreVertical, Send, MessageCircle, Smile,
-  Play, Pause, Mic, CircleDollarSign, PhoneCall, TrendingDown, Zap, Activity
+  Play, Pause, Mic, CircleDollarSign, PhoneCall, TrendingDown, Zap, Activity,
+  Shield, Award, Terminal, Users, Crown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser, sendEmailVerification,
-  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile
+  signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, sendPasswordResetEmail
 } from 'firebase/auth';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
@@ -28,6 +29,7 @@ import {
   runTransaction, increment, writeBatch, arrayUnion, arrayRemove
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType, messaging, getToken, onMessage } from './lib/firebase';
+import AdminView from './components/AdminView';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -47,6 +49,16 @@ async function requestNativeNotificationPermission() {
       if (perm.display !== 'granted') {
         await LocalNotifications.requestPermissions();
       }
+      // Ensure a louder ringing and high-importance notification channel is registered on Android
+      await LocalNotifications.createChannel({
+        id: 'default',
+        name: 'Default SouqIraq Channel',
+        description: 'Loud background sound and vibration for direct notifications and messages',
+        importance: 5, // Android IMPORTANCE_HIGH (Rings/Sounds and displays banner)
+        visibility: 1, // PUBLIC
+        sound: 'default',
+        vibration: true
+      });
     } catch (e) {
       console.log('Capacitor local notification permissions not requested or supported:', e);
     }
@@ -74,7 +86,8 @@ async function triggerNativeNotification(title: string, body: string, type?: str
               body: body,
               id: Math.floor(Math.random() * 1000000),
               schedule: { at: new Date(Date.now() + 50) },
-              sound: undefined,
+              sound: 'default', // Ensures standard system sound plays (rings)
+              channelId: 'default', // Binds to high-importance custom ringing channel
               attachments: [],
               actionTypeId: "",
               extra: { type: type || 'direct' }
@@ -129,12 +142,28 @@ async function triggerNativeNotification(title: string, body: string, type?: str
 
 const getApiUrl = (path: string) => {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  
+  // Cache the origin if it's a real web URL (neither capacitor scheme nor localhost)
+  if (typeof window !== 'undefined' && origin && origin.startsWith('http') && !origin.includes('localhost:')) {
+    try {
+      localStorage.setItem('cached_api_origin', origin);
+    } catch (e) {}
+  }
+
   const isCap = origin.startsWith('capacitor://') || 
                 (origin.startsWith('http://localhost') && !origin.includes(':3000')) ||
                 origin.includes('192.168.') ||
                 (window as any).Capacitor;
+
   if (isCap) {
-    return `https://ais-pre-wlrbpf7khax3bie5zbm3fy-24605880583.europe-west2.run.app${path}`;
+    let savedOrigin = '';
+    try {
+      savedOrigin = localStorage.getItem('cached_api_origin') || '';
+    } catch (e) {}
+    
+    // Fallback to the live pre-production domain if no cached origin is available
+    const base = savedOrigin || 'https://ais-pre-wlrbpf7khax3bie5zbm3fy-24605880583.europe-west2.run.app';
+    return `${base}${path}`;
   }
   return path;
 };
@@ -340,7 +369,7 @@ const adCache: Record<string, any> = {};
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [view, setView] = useState<'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites'>('home');
+  const [view, setView] = useState<'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites' | 'about' | 'admin'>('home');
   const [viewingProfileId, setViewingProfileId] = useState<string | null>(null);
   const [selectedAd, setSelectedAd] = useState<Ad | null>(null);
   const [activeChat, setActiveChat] = useState<Conversation | null>(null);
@@ -405,7 +434,7 @@ export default function App() {
   }, []);
 
   // Helper to go back natively or fallback to standard state transition
-  const goBack = (defaultView: 'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites' = 'home') => {
+  const goBack = (defaultView: 'home' | 'details' | 'create' | 'profile' | 'sellerProfile' | 'chats' | 'chatroom' | 'myAds' | 'notifications' | 'blocks' | 'favorites' | 'admin' = 'home') => {
     if (typeof window !== 'undefined' && window.history.state && window.history.length > 1) {
       window.history.back();
     } else {
@@ -428,6 +457,26 @@ export default function App() {
         activeChat: null
       }, '');
     }
+  }, []);
+
+  // Ask for notification permission automatically on first app load (first open)
+  useEffect(() => {
+    const checkAndPromptNotifications = async () => {
+      if (typeof window === 'undefined') return;
+      
+      const hasPrompted = localStorage.getItem('souqiraq_notif_prompted');
+      if (!hasPrompted) {
+        // Trigger notification permission dialog from the browser/OS System overlay
+        await requestNativeNotificationPermission();
+        localStorage.setItem('souqiraq_notif_prompted', 'true');
+      }
+    };
+    
+    // Tiny delay to allow initial components to fully mount and paint
+    const timer = setTimeout(() => {
+      checkAndPromptNotifications();
+    }, 2000);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -618,16 +667,20 @@ export default function App() {
 
       // 2. Send Push Notification if token exists
       if (recipientData.fcmToken) {
-        await fetch(getApiUrl('/api/notifications/send'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            token: recipientData.fcmToken,
-            title,
-            body: message,
-            data
-          })
-        });
+        try {
+          await fetch(getApiUrl('/api/notifications/send'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token: recipientData.fcmToken,
+              title,
+              body: message,
+              data
+            })
+          });
+        } catch (pushErr) {
+          console.warn('Push notification delivery skipped or not configured in this environment:', pushErr);
+        }
       }
     } catch (e) {
       console.error('Error creating notification:', e);
@@ -900,13 +953,26 @@ export default function App() {
 
   const loginWithGoogle = async () => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const isCapacitor = origin.startsWith('capacitor://') || 
-                        origin.startsWith('https://localhost') || 
-                        (origin.startsWith('http://localhost') && !origin.includes(':3000')) ||
-                        origin.includes('192.168.') ||
-                        (window as any).Capacitor;
+    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    const userAgentLower = userAgent.toLowerCase();
+    
+    // Comprehensive check for APKs, embedded WebViews, Capacitor, Cordova, and non-standard browser environments
+    const isCapacitorOrWebView = 
+      origin.startsWith('capacitor://') || 
+      origin.startsWith('https://localhost') || 
+      (origin.startsWith('http://localhost') && !origin.includes(':3000')) ||
+      origin.includes('192.168.') ||
+      (window as any).Capacitor ||
+      (window as any).cordova ||
+      (typeof window !== 'undefined' && window.location.protocol === 'file:') ||
+      userAgentLower.includes('wv') ||
+      userAgentLower.includes('webview') ||
+      (userAgentLower.includes('android') && userAgentLower.includes('version/')) ||
+      // FBAN/FBAV are Facebook app webviews which also block popups
+      userAgentLower.includes('fban') ||
+      userAgentLower.includes('fbav');
 
-    if (isCapacitor) {
+    if (isCapacitorOrWebView) {
       setToast({
         title: 'تنويّه هام لمستخدمي التطبيق المحمول 📱',
         body: 'جوجل تمنع تسجيل الدخول العادي بـ Google داخل تطبيقات الـ APK ما لم يتم تفعيل Google Sign-In الأصلي وربط بصمة الـ SHA-1 لتوقيع تطبيقك بـ Firebase Console. يرجى استخدام البريد الإلكتروني/الهاتف أو النقر على "دخول فوري بحساب تجريبي" بالأسفل للاستخدام المباشر.'
@@ -936,6 +1002,9 @@ export default function App() {
       } else if (error.code === 'auth/popup-blocked') {
         errorTitle = 'تم حظر النافذة المنبثقة';
         errorMessage = 'قام المتصفح بحظر نافذة تسجيل الدخول. يرجى السماح بالنوافذ المنبثقة (Popups) لهذا الموقع.';
+      } else if (error.code === 'auth/operation-not-supported-in-this-environment' || error.message?.includes('not supported')) {
+        errorTitle = 'البيئة غير مدعومة';
+        errorMessage = 'لا يمكن فتح نافذة Google المنبثقة داخل التطبيق. يرجى استخدام الدخول المباشر بالبريد أو رقم الهاتف.';
       }
 
       setToast({
@@ -943,6 +1012,7 @@ export default function App() {
         body: errorMessage
       });
       setTimeout(() => setToast(null), 5000);
+      throw error;
     }
   };
 
@@ -1058,6 +1128,58 @@ export default function App() {
     } catch (error) {
       console.error("Error creating/navigating to chat:", error);
       alert("عذراً، حدث خطأ أثناء فتح المحادثة. الرجاء المحاولة مجدداً.");
+    }
+  };
+
+  const startSupportChat = async () => {
+    if (!user) {
+      handleLogin();
+      return;
+    }
+    try {
+      const chatsRef = collection(db, 'chats');
+      const q = query(
+        chatsRef, 
+        where('participants', 'array-contains', user.uid)
+      );
+      const snap = await getDocs(q);
+      
+      const existingDoc = snap.docs.find(doc => {
+        const data = doc.data();
+        return data.adId === 'support' && data.participants.includes('admin_support');
+      });
+      
+      let chat: Conversation;
+      if (existingDoc) {
+        chat = { id: existingDoc.id, ...existingDoc.data() } as Conversation;
+      } else {
+        const newChat: Omit<Conversation, 'id'> = {
+          participants: [user.uid, 'admin_support'],
+          adId: 'support',
+          adTitle: 'الدعم الفني والشكاوى 🛠️',
+          lastMessage: 'أهلاً بك في الدعم الفني لسوق الرافدين 🇮🇶. تفضل بطرح سؤالك!',
+          lastMessageAt: serverTimestamp(),
+          unreadCount: {
+            [user.uid]: 0,
+            'admin_support': 1
+          },
+        };
+        const docRef = await addDoc(collection(db, 'chats'), newChat);
+        chat = { id: docRef.id, ...newChat } as Conversation;
+        
+        await addDoc(collection(db, 'chats', docRef.id, 'messages'), {
+          senderId: 'admin_support',
+          text: 'أهلاً بك في الدعم الفني لسوق الرافدين 🇮🇶. نحن هنا لمساعدتك والإجابة على استفساراتك وحل أي مشكلة تواجهها. تفضل بطرح سؤالك!',
+          read: false,
+          createdAt: serverTimestamp()
+        });
+      }
+      
+      setActiveChat(chat);
+      setView('chatroom');
+    } catch (error) {
+      console.error("Error starting support chat:", error);
+      alert("عذراً، حدث خطأ أثناء فتح الدعم. الرجاء المحاولة مجدداً.");
     }
   };
 
@@ -1211,6 +1333,7 @@ export default function App() {
               favorites={favorites}
               toggleFavorite={toggleFavorite}
               onRefresh={handleRefresh}
+              setView={setView}
             />
           )}
 
@@ -1220,6 +1343,7 @@ export default function App() {
               onClose={() => goBack('home')} 
               onSuccess={() => goBack('home')} 
               createNotification={createNotification}
+              onViewSupport={startSupportChat}
             />
           )}
 
@@ -1266,6 +1390,7 @@ export default function App() {
               onBack={() => goBack('profile')}
               onAdClick={showAdDetails}
               createNotification={createNotification}
+              onViewSupport={startSupportChat}
             />
           )}
 
@@ -1305,6 +1430,8 @@ export default function App() {
             <ProfileView 
               user={user} 
               profile={profile}
+              setProfile={setProfile}
+              setUser={setUser}
               blockedUsers={blockedUsers}
               unreadNotifications={unreadNotifications}
               onLogout={handleLogout}
@@ -1316,6 +1443,9 @@ export default function App() {
               showInstallButton={showInstallButton}
               onInstall={handleInstallClick}
               setToast={setToast}
+              onViewAbout={() => setView('about')}
+              onViewAdmin={() => setView('admin')}
+              onViewSupport={startSupportChat}
             />
           )}
 
@@ -1337,6 +1467,20 @@ export default function App() {
               onBack={() => goBack('chats')}
               blockedUsers={blockedUsers}
               createNotification={createNotification}
+            />
+          )}
+
+          {view === 'about' && (
+            <AboutUsView 
+              onBack={() => goBack('profile')} 
+            />
+          )}
+
+          {view === 'admin' && user && (
+            <AdminView 
+              user={user} 
+              onBack={() => goBack('profile')} 
+              setToast={setToast}
             />
           )}
         </AnimatePresence>
@@ -1615,33 +1759,25 @@ function VoiceMessagePlayer({ audioUrl, isMe }: { audioUrl: string, isMe: boolea
       <button 
         type="button"
         onClick={togglePlay}
-        className={cn(
-          "w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-md active:scale-90 shrink-0",
-          isMe 
-            ? "bg-white text-brand-primary hover:bg-white/90 shadow-sm" 
-            : "bg-brand-primary text-white hover:bg-brand-primary/95 shadow-sm"
-        )}
+        className="w-9 h-9 rounded-full flex items-center justify-center transition-all shadow-none active:scale-90 shrink-0 bg-white/20 hover:bg-white/30 text-white"
       >
         {isPlaying ? (
-          <Pause className="w-4 h-4 fill-current text-current" />
+          <Pause className="w-4 h-4 text-white" />
         ) : (
-          <Play className="w-4 h-4 fill-current text-current translate-x-0.5" />
+          <Play className="w-4 h-4 translate-x-0.5 text-white" />
         )}
       </button>
       
       <div className="flex-1 space-y-1">
-        <div className="relative h-1.5 w-full bg-black/10 rounded-full overflow-hidden">
+        <div className="relative h-1 w-full bg-white/15 rounded-full overflow-hidden">
           <div 
-            className={cn(
-              "absolute top-0 bottom-0 left-0 transition-all duration-100",
-              isMe ? "bg-white" : "bg-brand-primary"
-            )} 
+            className="absolute top-0 bottom-0 left-0 transition-all duration-100 bg-white" 
             style={{ width: `${progress}%` }} 
           />
         </div>
-        <div className="flex items-center justify-between text-[9px] font-bold opacity-75">
+        <div className="flex items-center justify-between text-[9px] font-bold text-white/70">
           <span>{isPlaying ? currentTime : duration}</span>
-          <Mic className="w-3 h-3 opacity-65" />
+          <Mic className="w-3 h-3 opacity-60" />
         </div>
       </div>
     </div>
@@ -2084,7 +2220,7 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
       />
 
       {/* Messages Area - Visual Rhythm and Spacing */}
-      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-1.5 no-scrollbar bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] bg-fixed opacity-[0.98]">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-1.5 no-scrollbar bg-[#f5f4ef] bg-fixed relative opacity-[0.98]">
         {isBlocked && (
           <motion.div 
             initial={{ opacity: 0, y: -10 }}
@@ -2165,12 +2301,12 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
                       }
                     }}
                     className={cn(
-                      "max-w-[85%] relative cursor-grab active:cursor-grabbing",
-                      isMe ? "chat-gradient-me text-white shadow-sm" : "chat-gradient-other border border-brand-border/50 text-brand-primary shadow-sm",
-                      "px-4 py-2.5 transition-all duration-300",
+                      "max-w-[80%] relative cursor-grab active:cursor-grabbing text-white shadow-[0_3px_12px_-4px_rgba(0,0,0,0.18)] border-none",
+                      isMe ? "bg-[#111111]" : "bg-[#27272a]",
+                      "px-3.5 py-1.5 transition-all duration-300",
                       isMe 
-                        ? cn("rounded-[20px]", !isNextMe && "rounded-bl-none", isPrevMe && "rounded-tl-[8px]")
-                        : cn("rounded-[20px]", !isNextMe && "rounded-br-none", isPrevMe && "rounded-tr-[8px]")
+                        ? cn("rounded-[22px]", !isNextMe && "rounded-bl-[4px]", isPrevMe && "rounded-tl-[10px]")
+                        : cn("rounded-[22px]", !isNextMe && "rounded-br-[4px]", isPrevMe && "rounded-tr-[10px]")
                     )}
                   >
                     
@@ -2183,10 +2319,7 @@ function ChatRoomView({ user, chat, onBack, blockedUsers, createNotification }: 
                       )}
 
                       {msg.type === 'offer' && (
-                        <div className={cn(
-                          "p-4 rounded-2xl w-full min-w-[200px] space-y-3",
-                          isMe ? "bg-white/10" : "bg-brand-bg border border-brand-border"
-                        )}>
+                        <div className="p-4 rounded-2xl w-full min-w-[200px] space-y-3 bg-white/10 border border-white/10 text-white">
                            <div className="flex items-center justify-between">
                               <span className="text-[10px] font-black uppercase tracking-widest opacity-60">عرض شراء</span>
                               <div className={cn(
@@ -2494,9 +2627,13 @@ function HomeView({
   activeCity, setActiveCity,
   sortBy, setSortBy,
   searchQuery, setSearchQuery, ads, loading, onAdClick,
-  favorites, toggleFavorite, onRefresh
+  favorites, toggleFavorite, onRefresh, setView
 }: any) {
   const [quickViewAd, setQuickViewAd] = useState<Ad | null>(null);
+
+  const featuredAds = useMemo(() => {
+    return (ads || []).filter((ad: any) => ad.isFeatured && ad.status === 'active');
+  }, [ads]);
 
   // --- Pull-To-Refresh System ---
   const [pullDistance, setPullDistance] = useState(0);
@@ -2729,6 +2866,61 @@ function HomeView({
           </div>
         </div>
 
+        {/* Spotlight VIP Carousel Section */}
+        {featuredAds.length > 0 && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-600 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
+                  👑 منصة التميز الذهبية
+                </span>
+                <h3 className="text-2xl font-serif font-black text-brand-primary">عروض مميزة وحصرية</h3>
+              </div>
+              <div className="h-[1px] flex-1 mx-8 bg-amber-200/50" />
+            </div>
+
+            <div className="flex gap-6 overflow-x-auto no-scrollbar pb-6 -mx-6 px-6">
+              {featuredAds.map((ad: any, idx: number) => (
+                <motion.div
+                  key={`spotlight-${ad.id}`}
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: idx * 0.1 }}
+                  className="w-[280px] sm:w-[320px] shrink-0"
+                  onClick={() => onAdClick(ad)}
+                >
+                  <div className="group cursor-pointer bg-gradient-to-br from-amber-50/80 to-amber-100/30 rounded-3xl p-3 border border-amber-500/30 hover:shadow-elite transition-all duration-500 relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-300 via-amber-500 to-amber-300 animate-shimmer" />
+                    <div className="relative aspect-[4/3] rounded-2xl overflow-hidden grainy mb-3">
+                      <img
+                        src={ad.images[0]}
+                        alt={ad.title}
+                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute top-3 right-3 bg-amber-500 text-white px-2.5 py-1 rounded-full shadow-md text-[9px] font-black flex items-center gap-1 border border-amber-400">
+                        <Sparkles className="w-2.5 h-2.5" />
+                        <span>مميز جداً</span>
+                      </div>
+                      <div className="absolute bottom-3 right-3 bg-black/60 text-white px-2.5 py-1 rounded-full text-[9px] font-semibold">
+                        {ad.location.city}
+                      </div>
+                    </div>
+                    <div className="space-y-1 p-1">
+                      <h4 className="font-bold text-sm text-gray-800 line-clamp-1 group-hover:text-amber-700 transition-colors">
+                        {ad.title}
+                      </h4>
+                      <p className="text-amber-700 font-serif font-black text-sm">
+                        {ad.price.toLocaleString()} د.ع
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Ads Grid with Section Title */}
         <div className="space-y-12">
           <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
@@ -2819,88 +3011,25 @@ function HomeView({
         </div>
       </div>
 
-      {/* Premium Iraq Market Footer */}
-      <footer className="w-full bg-[#090e1f] text-white mt-16 rounded-[40px] md:rounded-[56px] overflow-hidden border border-white/10 relative shadow-2xl">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(245,158,11,0.06),transparent_50%)]" />
-        <div className="absolute top-10 left-10 w-44 h-44 bg-blue-500/5 blur-[80px] rounded-full pointer-events-none" />
-        
-        <div className="max-w-6xl mx-auto px-6 py-12 md:py-16 relative z-10 grid grid-cols-1 md:grid-cols-12 gap-10 md:gap-14 text-right">
-          {/* Brand Intro column */}
-          <div className="md:col-span-5 space-y-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
-                <Sparkles className="w-5 h-5 text-amber-500" />
-              </div>
-              <span className="text-2xl font-serif font-black tracking-wider bg-gradient-to-l from-amber-400 to-yellow-200 bg-clip-text text-transparent">سوق الرافدين</span>
+      {/* Premium Iraq Market Footer - Extremely Elegant & Clean */}
+      <footer className="w-full mt-24 border-t border-brand-border/30 pt-10 pb-12 text-center relative z-10">
+        <div className="max-w-4xl mx-auto px-6 space-y-4">
+          <div className="flex items-center justify-center gap-2">
+            <div className="w-6 h-6 rounded-lg bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
             </div>
-            <p className="text-xs text-slate-400 font-bold leading-relaxed max-w-sm">
-              المنصة الوطنية الرائدة لبيع وشراء السيارات، العقارات، الأجهزة، والسلع النادرة في جميع محافظات العراق بكل أمان وبسرعة فائقة.
-            </p>
-            <div className="flex flex-wrap gap-2 pt-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/60 border border-slate-700/50 text-[9px] font-black tracking-wider text-slate-300">
-                <Zap className="w-2.5 h-2.5 text-amber-500" />
-                تصفح آمن
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/60 border border-slate-700/50 text-[9px] font-black tracking-wider text-slate-300">
-                <Activity className="w-2.5 h-2.5 text-emerald-500" />
-                خادم عراقي سريع
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800/60 border border-slate-700/50 text-[9px] font-black tracking-wider text-slate-300">
-                <CheckCircle2 className="w-2.5 h-2.5 text-blue-500" />
-                تحقق يدوي
-              </span>
-            </div>
+            <span className="text-sm font-serif font-black text-brand-primary">سوق الرافدين 🇮🇶</span>
           </div>
-
-          {/* Quick links & support columns */}
-          <div className="md:col-span-4 grid grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <h4 className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em]">أقسام المنصة</h4>
-              <ul className="space-y-3.5 text-xs text-slate-400 font-bold">
-                <li><a href="#" className="hover:text-amber-400 transition-colors">كل الإعلانات</a></li>
-                <li><a href="#" className="hover:text-amber-400 transition-colors">إلكترونيات فاخرة</a></li>
-                <li><a href="#" className="hover:text-amber-400 transition-colors">سيارات ومحركات</a></li>
-                <li><a href="#" className="hover:text-amber-400 transition-colors">عقارات ومجمعات</a></li>
-              </ul>
-            </div>
-            
-            <div className="space-y-4">
-              <h4 className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em]">الدعم والمساعدة</h4>
-              <ul className="space-y-3.5 text-xs text-slate-400 font-bold">
-                <li><a href="#" className="hover:text-amber-400 transition-colors">شروط الاستخدام</a></li>
-                <li><a href="#" className="hover:text-amber-400 transition-colors">اتصل بفريقنا</a></li>
-                <li><a href="#" className="hover:text-amber-400 transition-colors">سياسة الخصوصية</a></li>
-                <li><a href="#" className="hover:text-amber-400 transition-colors">تعليمات الأمان</a></li>
-              </ul>
-            </div>
+          <p className="text-[11px] text-[#777] font-semibold leading-relaxed max-w-lg mx-auto">
+            منصة وطنية شاملة وآمنة لشراء وبيع السيارات والمحركات والعقارات والسلع والأجهزة بموثوقية تامة وتواصل فوري متطور.
+          </p>
+          <div className="flex items-center justify-center gap-4 text-[9px] text-brand-secondary font-black tracking-wider">
+            <span className="bg-emerald-50 text-emerald-600 border border-emerald-100/60 px-2 py-0.5 rounded-full">● تواصل مشفر</span>
+            <span className="bg-blue-50 text-blue-600 border border-blue-100/60 px-2 py-0.5 rounded-full">● خادم وطني سريع</span>
           </div>
-
-          {/* Exclusive Iraq Developer Column */}
-          <div className="md:col-span-3 space-y-4 border-t md:border-t-0 md:border-r border-white/5 pt-8 md:pt-0 md:pr-8">
-            <h4 className="text-[10px] font-black uppercase text-amber-500 tracking-[0.2em]">الهوية والتطوير</h4>
-            <div className="p-4 bg-white/[0.03] backdrop-blur-md rounded-2xl border border-white/5 space-y-3">
-              <div className="flex items-center justify-between text-[10px] text-slate-400 font-black">
-                <span className="bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full text-[8px]">مستقر</span>
-                <span>تحديث النظام</span>
-              </div>
-              <p className="text-xs text-slate-300 font-bold leading-relaxed">
-                تمت البرمجة وهندسة البيانات بالكامل بأرقى المعايير بواسطة <span className="text-amber-400">سوق العراق للحلول البرمجية</span>.
-              </p>
-              <div className="pt-2 border-t border-white/5 flex items-center gap-2 text-[9px] text-slate-400 font-black tracking-wider justify-end">
-                <span>تطوير محلي مخصص للوطن 🇮🇶</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Lower footer copyright bar */}
-        <div className="border-t border-white/5 py-6 px-6 relative z-10 bg-black/40 text-slate-500 text-[10px] font-black tracking-wider flex flex-col md:flex-row-reverse justify-between items-center gap-4 max-w-6xl mx-auto">
-          <div className="flex items-center gap-2.5">
-            <span>حقوق الطبع والنشر © ٢٠٢٦ سوق الرافدين. جميع الحقوق محفوظة</span>
-          </div>
-          <div className="flex items-center gap-1 text-[9px] text-slate-400 bg-slate-800/30 px-3 py-1 rounded-full border border-slate-800/50">
-            <span>الرمز البرمجي الأصلي مخصص ومرخص بموجب قوانين حماية الإبداع البرمجية العراقية</span>
-          </div>
+          <p className="text-[10px] text-brand-secondary opacity-40 font-bold tracking-widest pt-2">
+            جميع الحقوق محفوظة © ٢٠٢٦ سوق الرافدين للتكنولوجيا والحلول البرمجية
+          </p>
         </div>
       </footer>
     </motion.div>
@@ -2924,7 +3053,7 @@ function FilterBadge({ label, active, onClick, icon }: any) {
   );
 }
 
-function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
+function CreateAdView({ user, onClose, onSuccess, createNotification, onViewSupport }: any) {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -2932,6 +3061,7 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
     category: 'electronics',
     condition: 'excellent',
     whatsappNumber: '',
+    city: 'بغداد',
   });
   const [images, setImages] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -2941,6 +3071,9 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
   const [catAiLoading, setCatAiLoading] = useState(false);
   const [descAiLoading, setDescAiLoading] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // MasterCard Promotion States
+  const [isFeaturedChoice, setIsFeaturedChoice] = useState(false);
 
   const generateAiImage = async () => {
     if (!formData.title) {
@@ -3023,6 +3156,20 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
         finalImages.push('https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?q=80&w=2000&auto=format&fit=crop');
       }
 
+      // Coordinates map for Iraqi cities to make them display beautifully on maps
+      const cityCoords: Record<string, { lat: number, lng: number }> = {
+        'بغداد': { lat: 33.3152, lng: 44.3661 },
+        'البصرة': { lat: 30.5081, lng: 47.7835 },
+        'الموصل': { lat: 36.3489, lng: 43.1577 },
+        'أربيل': { lat: 36.1901, lng: 44.0089 },
+        'النجف': { lat: 31.9961, lng: 44.3312 },
+        'كربلاء': { lat: 32.6160, lng: 44.0249 },
+        'كركوك': { lat: 35.4681, lng: 44.3922 },
+        'الناصرية': { lat: 31.0578, lng: 46.2573 },
+        'السليمانية': { lat: 35.5618, lng: 45.4373 }
+      };
+      const selectedCityCoords = cityCoords[formData.city] || { lat: 33.3152, lng: 44.3661 };
+
       const adData: Omit<Ad, 'id'> = {
         title: formData.title,
         description: formData.description,
@@ -3030,16 +3177,25 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
         category: formData.category,
         condition: formData.condition,
         images: finalImages,
-        location: { lat: 33.3152, lng: 44.3661, city: 'بغداد' },
+        location: { lat: selectedCityCoords.lat, lng: selectedCityCoords.lng, city: formData.city },
         sellerId: user.uid,
         sellerName: user.displayName || 'بائع',
         contactMethod: 'whatsapp',
         whatsappNumber: formData.whatsappNumber,
         createdAt: serverTimestamp(),
-        status: 'active'
+        status: 'active',
+        isFeatured: isFeaturedChoice
       };
 
-      const adDocRef = await addDoc(collection(db, 'ads'), adData);
+      const finalAdData = {
+        ...adData,
+        ...(isFeaturedChoice ? { 
+          isFeatured: true,
+          featuredUntil: Date.now() + 30 * 24 * 60 * 60 * 1000 
+        } : {})
+      };
+
+      const adDocRef = await addDoc(collection(db, 'ads'), finalAdData);
       
       // Notify users interested in this category
       const interestedUsersQuery = query(
@@ -3052,8 +3208,10 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
         if (userDoc.id !== user.uid) {
           await createNotification(
             userDoc.id,
-            'منتج جديد يهمك!',
-            `تمت إضافة إعلان جديد في فئة ${CATEGORIES.find(c => c.id === formData.category)?.label}: "${formData.title}"`,
+            isFeaturedChoice ? 'منتج جديد يهمك مميز! 🌟' : 'منتج جديد يهمك!',
+            isFeaturedChoice 
+              ? `تمت إضافة إعلان مميز جديد في فئة ${CATEGORIES.find(c => c.id === formData.category)?.label}: "${formData.title}"`
+              : `تمت إضافة إعلان جديد في فئة ${CATEGORIES.find(c => c.id === formData.category)?.label}: "${formData.title}"`,
             'ad',
             { adId: adDocRef.id }
           ).catch(() => {});
@@ -3063,7 +3221,6 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
       onSuccess();
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'ads');
-    } finally {
       setSubmitting(false);
     }
   };
@@ -3296,6 +3453,19 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
         </div>
 
         <div className="space-y-2">
+          <label className="text-sm font-bold text-gray-700">المحافظة</label>
+          <select 
+            className="w-full bg-gray-50 border border-gray-100 rounded-xl p-4 focus:ring-2 focus:ring-brand-primary"
+            value={formData.city}
+            onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+          >
+            {CITIES.filter(c => c !== 'الكل').map(city => (
+              <option key={city} value={city}>{city}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-sm font-bold text-gray-700">وصف الغرض</label>
             <button 
@@ -3328,6 +3498,46 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
           />
         </div>
 
+        {/* Promotion selector inside creation form */}
+        <div className="space-y-3 pt-6 border-t border-brand-border/30">
+          <label className="text-sm font-bold text-gray-700 block">نوع ترويج النشر المطلوب</label>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              type="button"
+              onClick={() => setIsFeaturedChoice(false)}
+              className={cn(
+                "p-4 rounded-2xl border text-right transition-all flex flex-col gap-1.5 cursor-pointer relative",
+                !isFeaturedChoice 
+                  ? "border-brand-primary bg-brand-primary/5 ring-2 ring-brand-primary/10" 
+                  : "border-brand-border bg-white"
+              )}
+            >
+              <span className="font-bold text-sm text-brand-primary">نشر عادي (مجاني)</span>
+              <span className="text-[10px] text-gray-500 leading-normal">ينشر فوراً في القوائم العادية بموثوقية كاملة.</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFeaturedChoice(true)}
+              className={cn(
+                "p-4 rounded-2xl border text-right transition-all flex flex-col gap-1.5 cursor-pointer relative overflow-hidden group",
+                isFeaturedChoice 
+                  ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-500/10" 
+                  : "border-brand-border bg-white hover:border-amber-300"
+              )}
+            >
+              {isFeaturedChoice && (
+                <span className="absolute top-1 left-1 bg-amber-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded">مميز ⭐️</span>
+              )}
+              <span className="font-bold text-sm text-amber-700 flex items-center gap-1">
+                نشر مميز (⭐️ مجاني وحصري)
+              </span>
+              <span className="text-[10px] text-amber-900/80 leading-relaxed font-semibold">
+                يثبت ببطاقة ذهبية أعلى الواجهة لمد تواصلك وزيادة نسبة الرؤية والمبيعات بـ 10 أضعاف.
+              </span>
+            </button>
+          </div>
+        </div>
+
         {!user?.emailVerified && (
           <div className="p-4 bg-amber-50 border border-amber-100 rounded-3xl flex items-center gap-3">
             <AlertCircle className="text-amber-600 w-5 h-5 shrink-0" />
@@ -3337,10 +3547,10 @@ function CreateAdView({ user, onClose, onSuccess, createNotification }: any) {
 
         <button 
           disabled={submitting || !user?.emailVerified}
-          className="w-full bg-brand-primary text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-brand-primary/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          className="w-full bg-brand-primary text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-brand-primary/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
         >
           {submitting && <Loader2 className="w-5 h-5 animate-spin" />}
-          نشر الإعلان
+          {isFeaturedChoice ? 'نشر الإعلان المميز مجاناً ⭐' : 'نشر الإعلان العادي مجاناً'}
         </button>
       </form>
       </div>
@@ -3536,12 +3746,13 @@ function LogoutConfirmModal({ isOpen, onClose, onConfirm }: { isOpen: boolean, o
 }
 
 function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClose: () => void, onGoogleLogin: () => void }) {
-  const [activeTab, setActiveTab] = useState<'login' | 'register'>('login');
+  const [activeTab, setActiveTab] = useState<'login' | 'register' | 'forgot'>('login');
   const [name, setName] = useState('');
   const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
   if (!isOpen) return null;
 
@@ -3562,12 +3773,38 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setSuccessMsg('');
 
     const formatted = validateAndFormatEmail(emailOrPhone);
     if (!formatted) {
       setErrorMsg('يرجى إدخال البريد الإلكتروني أو رقم الهاتف!');
       return;
     }
+
+    if (activeTab === 'forgot') {
+      if (formatted.endsWith('@souqiraq.com')) {
+        setErrorMsg('الاستعادة متاحة فقط للحسابات المسجلة ببريد إلكتروني حقيقي.');
+        return;
+      }
+      setLoading(true);
+      try {
+        await sendPasswordResetEmail(auth, formatted);
+        setSuccessMsg('تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني بنجاح! فضلاً تحقق من صندوق الوارد أو البريد المزعج (Spam).');
+      } catch (err: any) {
+        console.error("Password reset error:", err);
+        let arabicErrMsg = 'فشل إرسال رابط إعادة التعيين. يرجى التحقق من البريد الإلكتروني المدخل.';
+        if (err.code === 'auth/user-not-found') {
+          arabicErrMsg = 'عذراً، البريد الإلكتروني غير مسجل في تطبيقنا.';
+        } else if (err.code === 'auth/invalid-email') {
+          arabicErrMsg = 'صيغة البريد الإلكتروني غير صحيحة.';
+        }
+        setErrorMsg(arabicErrMsg);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (password.length < 6) {
       setErrorMsg('يجب أن تكون كلمة المرور 6 خانات أو أكثر!');
       return;
@@ -3612,31 +3849,57 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
           console.error("Failed to write profile doc:", fsErr);
         }
 
+        // Send confirmation email if it is a real email registered
+        if (formatted && !formatted.endsWith('@souqiraq.com')) {
+          try {
+            await sendEmailVerification(userCredential.user);
+          } catch (verifErr) {
+            console.error("Defensive verification email fail on signup:", verifErr);
+          }
+        }
+
         onClose();
       }
     } catch (error: any) {
       console.error("Auth process error:", error);
       let arabicErrMsg = 'حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى.';
       
-      switch (error.code) {
-        case 'auth/email-already-in-use':
-          arabicErrMsg = 'هذا الحساب (أو رقم الهاتف) مسجل بالفعل! جرب تسجيل الدخول.';
-          break;
-        case 'auth/weak-password':
-          arabicErrMsg = 'كلمة المرور ضعيفة جداً! يجب أن تكون 6 خانات على الأقل.';
-          break;
-        case 'auth/invalid-email':
-          arabicErrMsg = 'البريد أو الهاتف غير صالح!';
-          break;
-        case 'auth/user-not-found':
-        case 'auth/wrong-password':
-        case 'auth/invalid-credential':
-          arabicErrMsg = 'بيانات الدخول غير صحيحة! يرجى التأكد من البريد/الهاتف وكلمة المرور.';
-          break;
-        case 'auth/too-many-requests':
-          arabicErrMsg = 'لقد حاولت تسجيل الدخول عدة مرات بشكل خاطئ! تم حظرك مؤقتاً، يرجى إعادة المحاولة لاحقاً.';
-          break;
+      const code = (error?.code || '').toLowerCase();
+      const rawMessage = (error?.message || '').toLowerCase();
+      
+      if (
+        code === 'auth/email-already-in-use' || 
+        rawMessage.includes('email-already-in-use')
+      ) {
+        arabicErrMsg = 'هذا الحساب (أو رقم الهاتف) مسجل بالفعل في تطبيقنا! جرب تسجيل الدخول بدلاً من إنشاء حساب جديد.';
+      } else if (
+        code === 'auth/invalid-credential' || 
+        code === 'auth/wrong-password' || 
+        code === 'auth/user-not-found' || 
+        rawMessage.includes('invalid-credential') || 
+        rawMessage.includes('wrong-password') || 
+        rawMessage.includes('user-not-found')
+      ) {
+        arabicErrMsg = 'بيانات الدخول غير صحيحة! يرجى التأكد من البريد الإلكتروني (أو رقم الهاتف) وكلمة المرور بشكل صحيح.';
+      } else if (
+        code === 'auth/weak-password' || 
+        rawMessage.includes('weak-password')
+      ) {
+        arabicErrMsg = 'كلمة المرور ضعيفة جداً! يجب أن تكون 6 خانات على الأقل.';
+      } else if (
+        code === 'auth/invalid-email' || 
+        rawMessage.includes('invalid-email')
+      ) {
+        arabicErrMsg = 'صيغة البريد الإلكتروني أو الهاتف غير صالحة!';
+      } else if (
+        code === 'auth/too-many-requests' || 
+        rawMessage.includes('too-many-requests')
+      ) {
+        arabicErrMsg = 'لقد حاولت تسجيل الدخول عدة مرات بشكل خاطئ! تم حظرك مؤقتاً لحماية الحساب، يرجى إعادة المحاولة لاحقاً.';
+      } else if (rawMessage.includes('network-request-failed')) {
+        arabicErrMsg = 'فشل الاتصال بالشبكة! يرجى التحقق من اتصال الإنترنت والمحاولة مرة أخرى.';
       }
+
       setErrorMsg(arabicErrMsg);
     } finally {
       setLoading(false);
@@ -3678,38 +3941,79 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
           </p>
 
           {/* Tabs */}
-          <div className="flex bg-brand-muted p-1 rounded-2xl mb-6">
-            <button
-              onClick={() => { setActiveTab('login'); setErrorMsg(''); }}
-              className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${
-                activeTab === 'login' 
-                  ? 'bg-white text-brand-primary shadow-sm' 
-                  : 'text-brand-secondary/70 hover:text-brand-primary'
-              }`}
-            >
-              تسجيل الدخول
-            </button>
-            <button
-              onClick={() => { setActiveTab('register'); setErrorMsg(''); }}
-              className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${
-                activeTab === 'register' 
-                  ? 'bg-white text-brand-primary shadow-sm' 
-                  : 'text-brand-secondary/70 hover:text-brand-primary'
-              }`}
-            >
-              إنشاء حساب جديد
-            </button>
-          </div>
+          {activeTab === 'forgot' ? (
+            <div className="flex items-center gap-2 mb-6 flex-row-reverse justify-between w-full">
+              <span className="text-sm font-black text-brand-primary">إعادة تعيين كلمة المرور</span>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('login'); setErrorMsg(''); setSuccessMsg(''); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-muted hover:bg-brand-muted/80 rounded-xl transition-all text-xs font-bold text-brand-primary"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+                <span>العودة للدخول</span>
+              </button>
+            </div>
+          ) : (
+            <div className="flex bg-brand-muted p-1 rounded-2xl mb-6">
+              <button
+                onClick={() => { setActiveTab('login'); setErrorMsg(''); setSuccessMsg(''); }}
+                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${
+                  activeTab === 'login' 
+                    ? 'bg-white text-brand-primary shadow-sm' 
+                    : 'text-brand-secondary/70 hover:text-brand-primary'
+                }`}
+              >
+                تسجيل الدخول
+              </button>
+              <button
+                onClick={() => { setActiveTab('register'); setErrorMsg(''); setSuccessMsg(''); }}
+                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${
+                  activeTab === 'register' 
+                    ? 'bg-white text-brand-primary shadow-sm' 
+                    : 'text-brand-secondary/70 hover:text-brand-primary'
+                }`}
+              >
+                إنشاء حساب جديد
+              </button>
+            </div>
+          )}
 
           {/* Error Message */}
           {errorMsg && (
             <motion.div 
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-xs font-bold mb-4 flex items-center gap-2"
+              className="bg-red-50 border border-red-100 text-red-600 rounded-2xl p-4 text-xs font-bold mb-4 flex flex-col gap-2 text-right"
             >
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{errorMsg}</span>
+              <div className="flex items-center gap-2 flex-row-reverse">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                <span>{errorMsg}</span>
+              </div>
+              {errorMsg.includes('مسجل بالفعل') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('login');
+                    setErrorMsg('');
+                    setSuccessMsg('');
+                  }}
+                  className="mt-1 w-full py-2 px-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                >
+                  <span>🔑 الانتقال لتسجيل الدخول بدلاً من ذلك</span>
+                </button>
+              )}
+            </motion.div>
+          )}
+
+          {/* Success Message */}
+          {successMsg && (
+            <motion.div 
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-emerald-50 border border-emerald-100 text-emerald-700 rounded-2xl p-4 text-xs font-bold mb-4 flex items-center gap-2 flex-row-reverse text-right"
+            >
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{successMsg}</span>
             </motion.div>
           )}
 
@@ -3730,28 +4034,44 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
             )}
 
             <div className="space-y-1.5">
-              <label className="text-xs font-black text-brand-primary">رقم الهاتف العراقي أو البريد الإلكتروني</label>
+              <label className="text-xs font-black text-brand-primary">
+                {activeTab === 'forgot' ? 'البريد الإلكتروني للتهيئة' : 'رقم الهاتف العراقي أو البريد الإلكتروني'}
+              </label>
               <input 
                 type="text"
                 required
                 value={emailOrPhone}
                 onChange={(e) => setEmailOrPhone(e.target.value)}
-                placeholder="مثال: 07701234567 أو mail@example.com"
+                placeholder={activeTab === 'forgot' ? "mail@example.com" : "مثال: 07701234567 أو mail@example.com"}
                 className="w-full bg-brand-muted border-none p-4 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all text-right ltr"
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-black text-brand-primary">كلمة المرور</label>
-              <input 
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••"
-                className="w-full bg-brand-muted border-none p-4 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all text-right ltr"
-              />
-            </div>
+            {activeTab !== 'forgot' && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-black text-brand-primary">كلمة المرور</label>
+                <input 
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••"
+                  className="w-full bg-brand-muted border-none p-4 rounded-2xl text-sm outline-none focus:ring-2 focus:ring-brand-primary/20 transition-all text-right ltr"
+                />
+              </div>
+            )}
+
+            {activeTab === 'login' && (
+              <div className="text-left mt-1">
+                <button 
+                  type="button"
+                  onClick={() => { setActiveTab('forgot'); setErrorMsg(''); setSuccessMsg(''); }}
+                  className="text-xs font-bold text-brand-primary/80 hover:text-brand-primary underline transition-colors"
+                >
+                  نسيت كلمة المرور؟ اضغط هنا للاستعادة
+                </button>
+              </div>
+            )}
 
             <button
               type="submit"
@@ -3764,98 +4084,19 @@ function AuthModal({ isOpen, onClose, onGoogleLogin }: { isOpen: boolean, onClos
                   <span>جاري المعالجة...</span>
                 </>
               ) : (
-                <span>{activeTab === 'login' ? 'دخول سريع' : 'إنشاء حسابي مجاناً'}</span>
+                <span>
+                  {activeTab === 'login' 
+                    ? 'دخول سريع' 
+                    : activeTab === 'register' 
+                      ? 'إنشاء حسابي مجاناً' 
+                      : 'إرسال رابط استعادة كلمة المرور'
+                  }
+                </span>
               )}
             </button>
           </form>
 
-          {/* Divider */}
-          <div className="relative flex items-center justify-center my-6">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-brand-border/60" />
-            </div>
-            <span className="relative px-4 text-[10px] font-black tracking-widest uppercase bg-white text-brand-secondary/50">أو</span>
-          </div>
 
-          {/* Social Sign In (For Web Users) */}
-          <button
-            onClick={async () => {
-              try {
-                await onGoogleLogin();
-              } catch (err: any) {
-                if (err.message === 'CAPACITOR_GOOGLE_AUTH_BLOCKED') {
-                  setErrorMsg('⚠️ قوقل تمنع تسجيل الدخول عبر الويب بـ Google في الـ APK ما لم تفعل تسجيل الدخول الأصلي بالبصمة في وحدة تحكم Firebase. نوصي باستخدام البريد الإلكتروني/الهاتف أو زر "حساب تجريبي" بالأسفل للدخول الفوري!');
-                } else {
-                  setErrorMsg('فشل تسجيل الدخول باستخدام حساب Google، يرجى المحاولة لاحقاً.');
-                }
-              }
-            }}
-            type="button"
-            className="w-full py-4 border-2 border-brand-border hover:bg-brand-muted hover:border-brand-primary/30 transition-all rounded-2xl flex items-center justify-center gap-2.5 active:scale-[0.98]"
-          >
-            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-              <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.53 14.98 1 12 1 7.35 1 3.28 3.67 1.13 7.58l3.92 3.04C5.99 7.42 8.79 5.04 12 5.04z" />
-              <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.36H12v4.51h6.46c-.29 1.48-1.12 2.73-2.38 3.58l3.7 2.87c2.16-1.99 3.71-4.92 3.71-8.6z" />
-              <path fill="#FBBC05" d="M5.05 10.62a7.12 7.12 0 0 1 0 2.76l-3.92 3.04A11.96 11.96 0 0 1 1.13 7.58l3.92 3.04z" />
-              <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.92l-3.7-2.87c-1.03.69-2.35 1.1-4.26 1.1-3.21 0-6.01-2.38-6.95-5.58H1.13v3.13C3.28 20.33 7.35 23 12 23z" />
-            </svg>
-            <span className="text-sm font-bold text-gray-700">مزامنة سريعة بواسطة Google</span>
-          </button>
-
-          {/* Golden One-click Quick Demo Account (Solves Capacitor Google Auth restriction) */}
-          <button
-            onClick={async () => {
-              setLoading(true);
-              setErrorMsg('');
-              const demoEmail = "demo@souqiraq.com";
-              const demoPass = "123456";
-              try {
-                await signInWithEmailAndPassword(auth, demoEmail, demoPass);
-                onClose();
-              } catch (signInErr: any) {
-                if (signInErr.code === 'auth/user-not-found' || signInErr.code === 'auth/invalid-credential') {
-                  try {
-                    const userCredential = await createUserWithEmailAndPassword(auth, demoEmail, demoPass);
-                    await updateProfile(userCredential.user, {
-                      displayName: "مستكشف تجريبي"
-                    });
-                    const userRef = doc(db, 'users', userCredential.user.uid);
-                    await setDoc(userRef, {
-                      displayName: "مستكشف تجريبي",
-                      email: demoEmail,
-                      createdAt: serverTimestamp(),
-                      uid: userCredential.user.uid,
-                      rating: 5,
-                      reviewsCount: 1,
-                      verifiedSeller: true,
-                      notificationPrefs: {
-                        newListings: true,
-                        priceDrops: true,
-                        messages: true,
-                        offers: true
-                      }
-                    }, { merge: true });
-                    onClose();
-                  } catch (createErr: any) {
-                    setErrorMsg('خطأ أثناء تهيئة الحساب التجريبي: ' + createErr.message);
-                  }
-                } else {
-                  setErrorMsg('بيانات الدخول التجريبي غير صحيحة أو تم حظرها.');
-                }
-              } finally {
-                setLoading(false);
-              }
-            }}
-            type="button"
-            className="w-full py-4 mt-3 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-white font-black rounded-2xl flex items-center justify-center gap-2.5 shadow-md shadow-amber-500/10 active:scale-[0.98] transition-all"
-          >
-            <Sparkles className="w-5 h-5 text-white animate-pulse shrink-0 animate-bounce" />
-            <span className="text-sm">دخول فوري بلمسة واحدة (حساب تجريبي للتطبيق) *</span>
-          </button>
-          
-          <p className="text-[10px] text-center text-brand-secondary/50 mt-5 leading-normal">
-            * <strong className="text-brand-primary">ملاحظة لمشتركي الهاتف:</strong> قيود أمان جوجل تمنع فتح النوافذ المنبثقة داخل التطبيق. استخدم <strong>الحساب التجريبي الفوري</strong> أعلاه للتمتع بكافة مزايا التطبيق (المحادثات، كتابة الإعلانات) أو سجل بالبريد يدويّاً!
-          </p>
         </div>
       </motion.div>
     </div>
@@ -5226,14 +5467,76 @@ function VerificationModal({ isOpen, onClose, onVerified }: any) {
 }
 
 function ProfileView({ 
-  user, profile, onLogout, onBack, onViewMyAds, onViewNotifications, unreadNotifications, onViewBlocked, blockedUsers, onViewFavorites, 
-  showInstallButton, onInstall, setToast 
+  user, profile, setProfile, setUser, onLogout, onBack, onViewMyAds, onViewNotifications, unreadNotifications, onViewBlocked, blockedUsers, onViewFavorites, 
+  showInstallButton, onInstall, setToast, onViewAbout, onViewAdmin, onViewSupport
 }: any) {
   const [permissionStatus, setPermissionStatus] = useState<string>(
     typeof window !== 'undefined' && "Notification" in window ? Notification.permission : "unsupported"
   );
   const [audioCheckText, setAudioCheckText] = useState('تجربة نغمة الإشارة 🔔');
   const [vibCheckText, setVibCheckText] = useState('تجربة الاهتزاز 📱');
+
+  const [checkingVerif, setCheckingVerif] = useState(false);
+
+  const isAdmin = user?.email === 'qaisar.m2019@gmail.com';
+
+  const checkEmailVerificationStatus = async () => {
+    if (!user) return;
+    setCheckingVerif(true);
+    try {
+      await auth.currentUser?.reload();
+      const updatedUser = auth.currentUser;
+      if (updatedUser) {
+        if (setUser) {
+          setUser({ ...updatedUser });
+        }
+        if (updatedUser.emailVerified) {
+          setToast({
+            title: 'تم تأكيد الحساب بنجاح 🎉',
+            body: 'تهانينا! تم التحقق من بريدك الإلكتروني وتأكيد حسابك بنجاح.'
+          });
+          setTimeout(() => setToast(null), 5000);
+        } else {
+          setToast({
+            title: 'لم يتم التأكيد بعد ⏳',
+            body: 'يرجى فتح رابط التأكيد المرسل في بريدك الإلكتروني والضغط على الزر للتحديث.'
+          });
+          setTimeout(() => setToast(null), 4000);
+        }
+      }
+    } catch (err: any) {
+      console.error("Verification check failed:", err);
+    } finally {
+      setCheckingVerif(false);
+    }
+  };
+
+  // Automatically check verification status every 4 seconds when the user hasn't verified yet
+  useEffect(() => {
+    if (!user || user.emailVerified || (user.email && user.email.endsWith('@souqiraq.com'))) return;
+
+    const interval = setInterval(async () => {
+      try {
+        await auth.currentUser?.reload();
+        const updatedUser = auth.currentUser;
+        if (updatedUser && updatedUser.emailVerified) {
+          if (setUser) {
+            setUser({ ...updatedUser });
+          }
+          setToast({
+            title: 'تم تأكيد الحساب بنجاح 🎉',
+            body: 'تهانينا! تم التحقق من بريدك الإلكتروني تلقائياً.'
+          });
+          setTimeout(() => setToast(null), 5000);
+          clearInterval(interval);
+        }
+      } catch (err) {
+        console.error("Auto background verification check failed:", err);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [user?.emailVerified, user?.uid, setUser]);
 
   const requestPermission = async () => {
     if (typeof window === 'undefined' || !("Notification" in window)) return;
@@ -5299,9 +5602,24 @@ function ProfileView({
     setSaving(true);
     try {
       await updateDoc(doc(db, 'users', user.uid), formData);
+      if (setProfile) {
+        setProfile((prev: any) => ({ ...prev, ...formData }));
+      }
       setEditing(false);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+      setToast({
+        title: 'تم حفظ التعديلات بنجاح ✨',
+        body: 'تم تحديث بيانات ملفك الشخصي بنجاح في قاعدة البيانات.'
+      });
+      setTimeout(() => setToast(null), 4000);
+    } catch (error: any) {
+      console.error("Profile save failed:", error);
+      setToast({
+        title: 'فشل حفظ التعديلات ⚠️',
+        body: error?.message?.includes('permission') || error?.message?.includes('Permission')
+          ? 'عذراً، انتهت الصلاحية أو أن البيانات المدخلة غير مدعومة. يرجى التحقق من صحة البيانات.'
+          : 'حدث خطأ أثناء الاتصال بقاعدة البيانات. يرجى التحقق من الإنترنت وإعادة المحاولة.'
+      });
+      setTimeout(() => setToast(null), 5000);
     } finally {
       setSaving(false);
     }
@@ -5310,6 +5628,9 @@ function ProfileView({
   const markVerified = async () => {
     try {
       await updateDoc(doc(db, 'users', user.uid), { isVerified: true });
+      if (setProfile) {
+        setProfile((prev: any) => prev ? { ...prev, isVerified: true } : null);
+      }
     } catch (e) { console.error(e); }
   };
 
@@ -5504,51 +5825,6 @@ function ProfileView({
                 notificationPrefs: { ...formData.notificationPrefs, offers: val }
               })}
             />
-
-            {/* Native / APK Notification Testing area */}
-            <div className="pt-4 border-t border-brand-border/40">
-              <h4 className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-1">إشعارات خلفية الهاتف (APK / PWA)</h4>
-              <p className="text-[10px] text-brand-secondary opacity-70 leading-relaxed mb-4">
-                تتيح لك هذه الميزة استقبال الإشعارات مباشرة على شريط إشعارات الهاتف حتى لو كان التطبيق مغلقاً أو يعمل في الخلفية كلياً مثل تطبيق الواتساب.
-              </p>
-              
-              <div className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await requestNativeNotificationPermission();
-                    await triggerNativeNotification(
-                      "تم تفعيل إشعارات الهاتف بنجاح! 🔔",
-                      "من الآن فصاعداً ستصلك التنبيهات والرسائل الجديدة هنا في الخلفية مثل واتساب."
-                    );
-                  }}
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-primary text-white dark:bg-white dark:text-black hover:opacity-90 font-bold rounded-2xl text-xs transition-all cursor-pointer"
-                >
-                  <Bell className="w-4 h-4" />
-                  طلب الإذن وإرسال إشعار فوري
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setToast({
-                      title: "⏳ تم جدولة الإشعار الخلفي",
-                      body: "يرجى الخروج من التطبيق الآن أو قفل شاشة الهاتف لتجربة وصوله بعد 5 ثوانٍ."
-                    });
-                    setTimeout(async () => {
-                      await triggerNativeNotification(
-                        "تذكير من سوق الرافدين 📬",
-                        "لديك رسالة معلقة وتنبيه جديد بخصوص عروض الشراء!"
-                      );
-                    }, 5000);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-muted text-brand-primary hover:bg-brand-border/40 font-bold rounded-2xl text-xs border border-brand-border transition-all cursor-pointer"
-                >
-                  <Zap className="w-4 h-4" />
-                  تجربة إشعار في الخلفية (بعد 5 ثوانٍ)
-                </button>
-              </div>
-            </div>
           </div>
 
           <div className="bg-white p-6 rounded-3xl border border-brand-border space-y-6">
@@ -5659,138 +5935,60 @@ function ProfileView({
       </div>
 
       <div className="space-y-4 px-4 max-w-lg mx-auto w-full">
-        {/* مركز التحكم بأذونات وصلاحيات نظام الهاتف */}
-        <div className="bg-white rounded-3xl p-5 border border-brand-border/60 shadow-sm w-full mb-2 text-right">
-          <div className="flex items-center gap-2 mb-3 pb-3 border-b border-brand-border/40 justify-start flex-row-reverse">
-            <Settings className="w-4 h-4 text-brand-primary animate-spin" />
-            <h4 className="text-xs font-black uppercase tracking-wider text-brand-primary font-sans">أذونات وصلاحيات الهاتف (نظام Android)</h4>
-          </div>
-
-          <p className="text-[10px] text-brand-secondary/70 leading-relaxed mb-4 text-right">
-            تم ربط التطبيق بالكامل بنواة نظام أندرويد. تتيح لك الأذونات التالية استلام إشعارات حية وتصفح ملفاتك لرفع الصور بسلاسة.
-          </p>
-
-          <div className="space-y-3.5">
-            {/* Notification Permission Item */}
-            <div className="flex items-center justify-between p-3.5 bg-brand-bg rounded-2xl border border-brand-border/20 flex-row-reverse">
-              <div className="text-right flex-1 pr-3">
-                <span className="text-[9px] uppercase font-black tracking-widest text-brand-secondary/55 flex items-center gap-1 justify-end">
-                  <span>إشعار النظام الفوري</span>
-                  <Bell className="w-3 h-3 text-amber-500" />
-                </span>
-                <span className="text-xs font-black text-brand-primary mt-0.5 block">
-                  {permissionStatus === 'granted' ? 'مسموح ومفعّل بنظام أندرويد ✓' : permissionStatus === 'denied' ? '🚫 محظور من إعدادات الهاتف' : 'بانتظار الموافقة ⚠'}
-                </span>
-                <span className="text-[9px] text-brand-secondary/60 mt-1 block">مطلوب لاستلام الرسائل وتنبيهات البيع والشراء فوراً.</span>
-              </div>
+        {/* Verification Email Card for Real Accounts */}
+        {!user.emailVerified && user.email && !user.email.endsWith('@souqiraq.com') && (
+          <div className="bg-amber-50 border border-amber-200 rounded-3xl p-5 text-right w-full mb-2 shadow-sm">
+            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-amber-200/40 justify-start flex-row-reverse">
+              <AlertCircle className="w-4 h-4 text-amber-600 animate-pulse" />
+              <h4 className="text-xs font-black uppercase tracking-wider text-amber-800">تأكيد البريد الإلكتروني معلق ⏳</h4>
+            </div>
+            <p className="text-[11px] text-amber-700/90 leading-relaxed mb-4">
+              أهلاً بك! بريدك الإلكتروني غير مؤكد حالياً. يرجى تأكيد بريدك لتفعيل حسابك بالكامل وحماية خصوصية بياناتك في المنصة. انقر أدناه لإرسال رابط التفعيل إلى بريدك الإلكتروني.
+            </p>
+            <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={requestPermission}
+                disabled={verifying || linkSent}
+                onClick={handleSendVerification}
                 className={cn(
-                  "px-3.5 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-xl shadow-md shrink-0 active:scale-95 transition-all",
-                  permissionStatus === 'granted' 
-                    ? "bg-emerald-500 text-white cursor-default shadow-none" 
-                    : "bg-brand-primary text-white hover:bg-brand-primary/90"
+                  "w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-sm",
+                  linkSent 
+                    ? "bg-emerald-500 text-white" 
+                    : "bg-amber-600 text-white hover:bg-amber-700 active:scale-95"
                 )}
               >
-                {permissionStatus === 'granted' ? 'مفعّل' : 'تفعيل الإذن'}
-              </button>
-            </div>
-
-            {/* Gallery / Storage Permission Item */}
-            <div className="flex items-center justify-between p-3.5 bg-brand-bg rounded-2xl border border-brand-border/20 flex-row-reverse">
-              <div className="text-right flex-1 pr-3">
-                <span className="text-[9px] uppercase font-black tracking-widest text-brand-secondary/55 flex items-center gap-1 justify-end">
-                  <span>الوصول للمعرض والصور</span>
-                  <ImageIcon className="w-3 h-3 text-emerald-500" />
-                </span>
-                <span className="text-xs font-black text-brand-primary mt-0.5 block">
-                  صلاحية جاهزة برمجياً (مدعومة بنظام Android) ✓
-                </span>
-                <span className="text-[9px] text-brand-secondary/60 mt-1 block">تسمح برفع صور منتجاتك وإعلاناتك وتعديل الصورة الشخصية الحية.</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/*';
-                  input.onchange = () => {
-                    setToast({
-                      title: "تم التحقق من الوصول بنجاح 📸",
-                      body: "الوصول لاستوديو الصور والصحيفة المحلية يعمل بكفاءة كاملة مع الأندرويد.",
-                      type: "system"
-                    });
-                    setTimeout(() => setToast(null), 4000);
-                  };
-                  input.click();
-                }}
-                className="px-3.5 py-1.5 text-[10px] font-black uppercase tracking-wider bg-[#51513d] text-white rounded-xl shadow-md shrink-0 hover:opacity-90 active:scale-95 transition-all"
-              >
-                اختبار المعرض
-              </button>
-            </div>
-
-            {/* Test buttons */}
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  playNotificationSound();
-                  setAudioCheckText('تم تشغيل الجرس 🔔');
-                  setTimeout(() => setAudioCheckText('تجربة نغمة الإشارة 🔔'), 1200);
-                }}
-                className="flex flex-col items-center gap-1.5 p-3.5 bg-brand-bg hover:bg-brand-primary/5 hover:border-brand-primary/25 border border-transparent rounded-2xl text-center transition-all active:scale-[0.97]"
-              >
-                <div className="w-8 h-8 rounded-xl bg-brand-primary/5 flex items-center justify-center text-brand-primary">
-                  <Bell className="w-4 h-4 animate-bounce" />
-                </div>
-                <span className="text-[9px] font-black text-brand-primary uppercase tracking-widest">{audioCheckText}</span>
+                {verifying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>جاري الإرسال الآن...</span>
+                  </>
+                ) : linkSent ? (
+                  <span>✓ تم إرسال الرابط! تفقد بريدك الوارد 📩</span>
+                ) : (
+                  <span>أرسل رابط تفعيل البريد الإلكتروني الآن</span>
+                )}
               </button>
 
               <button
                 type="button"
-                onClick={() => {
-                  if ('vibrate' in navigator) {
-                    navigator.vibrate([120, 50, 120]);
-                    setVibCheckText('جاري الاهتزاز 📳');
-                    setTimeout(() => setVibCheckText('تجربة الاهتزاز 📱'), 1200);
-                  } else {
-                    setVibCheckText('غير مدعوم ✕');
-                    setTimeout(() => setVibCheckText('تجربة الاهتزاز 📱'), 1200);
-                  }
-                }}
-                className="flex flex-col items-center gap-1.5 p-3.5 bg-brand-bg hover:bg-brand-primary/5 hover:border-brand-primary/25 border border-transparent rounded-2xl text-center transition-all active:scale-[0.97]"
+                disabled={checkingVerif}
+                onClick={checkEmailVerificationStatus}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white hover:bg-brand-muted/50 border border-brand-border/80 text-brand-primary rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95"
               >
-                <div className="w-8 h-8 rounded-xl bg-orange-500/5 flex items-center justify-center text-orange-500">
-                  <Zap className="w-4 h-4 animate-pulse" />
-                </div>
-                <span className="text-[9px] font-black text-brand-secondary uppercase tracking-widest">{vibCheckText}</span>
+                {checkingVerif ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+                    <span>جاري التحقق من التأكيد...</span>
+                  </>
+                ) : (
+                  <span>تحديث حالة التأكيد (تحقق يدوي) 🔄</span>
+                )}
               </button>
             </div>
-
-            {/* Send sample action button */}
-            <button
-              type="button"
-              onClick={() => {
-                playNotificationSound();
-                setToast({
-                  title: "تنبيه من سوق الرافدين",
-                  body: "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100% على جهازك! 🎉",
-                  type: "system"
-                });
-                triggerNativeNotification(
-                  "تنبيه من سوق الرافدين",
-                  "تهانينا! نظام الإشعارات والأصوات والنغمة الحية يعمل بكفاءة 100% على جهازك! 🎉"
-                );
-                setTimeout(() => setToast(null), 6000);
-              }}
-              className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl shadow-sm text-center active:scale-[0.98] transition-all"
-            >
-              إرسال إشعار تجريبي فوري لشاشة الهاتف 🚀
-            </button>
           </div>
-        </div>
+        )}
+
+
 
         <MenuButton 
           onClick={onViewNotifications} 
@@ -5800,17 +5998,35 @@ function ProfileView({
         />
         <MenuButton onClick={onViewMyAds} icon={<ShoppingBag />} label="إعلاناتي" />
         <MenuButton onClick={onViewFavorites} icon={<Heart />} label="المفضلة" />
+        
+        <MenuButton 
+          onClick={onViewSupport} 
+          icon={<MessageSquare className="text-blue-500" />} 
+          label="مركز المساعدة والدعم الفني 💬" 
+        />
+
+        {isAdmin && (
+          <MenuButton 
+            onClick={onViewAdmin} 
+            icon={<Shield className="text-amber-600 animate-pulse" />} 
+            label="لوحة إدارة سوق الرافدين 🛡️" 
+          />
+        )}
+
         <MenuButton 
           onClick={onViewBlocked}
           icon={<Ban className="text-brand-secondary" />} 
           label="المستخدمين المحظورين" 
           badge={blockedUsers?.length > 0 ? blockedUsers.length : undefined}
         />
+        
         <MenuButton 
-          onClick={() => setShowAboutModal(true)}
-          icon={<AlertCircle />} 
-          label="حول التطبيق" 
+          onClick={onViewAbout}
+          icon={<Users className="text-amber-500" />} 
+          label="من نحن 🇮🇶" 
         />
+
+
 
         {showInstallButton && (
           <button 
@@ -5917,12 +6133,25 @@ function ProfileView({
   );
 }
 
-function MyAdsView({ user, onBack, onAdClick, createNotification }: any) {
+function MyAdsView({ user, onBack, onAdClick, createNotification, onViewSupport }: any) {
   const [ads, setAds] = useState<Ad[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [showConfirm, setShowConfirm] = useState(false);
   const [adToDelete, setAdToDelete] = useState<string | null>(null);
+
+  const handlePromoteClick = async (ad: Ad) => {
+    try {
+      await updateDoc(doc(db, 'ads', ad.id), {
+        isFeatured: true,
+        featuredUntil: Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 Days Promo
+      });
+      alert('تمت ترقية إعلانك ونشره في فئة الإعلانات المميزة العصرية مجاناً وبنجاح! ⭐');
+    } catch (e) {
+      console.error(e);
+      alert('حدث خطأ أثناء ترقية الإعلان للمميز.');
+    }
+  };
 
   useEffect(() => {
     const q = query(
@@ -6030,7 +6259,7 @@ function MyAdsView({ user, onBack, onAdClick, createNotification }: any) {
                 <h3 className="font-bold text-[#444432] truncate">{ad.title}</h3>
                 <p className="text-brand-primary font-bold">{ad.price.toLocaleString()} د.ع</p>
                 
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex flex-wrap items-center gap-2 mt-2">
                   <span className={cn(
                     "text-[10px] px-2 py-0.5 rounded-full font-bold",
                     ad.status === 'active' ? "bg-green-50 text-green-600" : 
@@ -6038,6 +6267,19 @@ function MyAdsView({ user, onBack, onAdClick, createNotification }: any) {
                   )}>
                     {ad.status === 'active' ? 'نشط' : ad.status === 'sold' ? 'تم البيع' : 'محذوف'}
                   </span>
+                  {ad.isFeatured ? (
+                    <span className="text-[10px] bg-amber-500 text-white font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
+                      ★ مميز ونشط
+                    </span>
+                  ) : ad.status === 'active' ? (
+                    <button
+                      type="button"
+                      onClick={() => handlePromoteClick(ad)}
+                      className="text-[10px] font-bold text-amber-700 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/20 active:scale-95 transition-all cursor-pointer flex items-center gap-0.5"
+                    >
+                      ⭐ ترقية للمميز (مجاناً)
+                    </button>
+                  ) : null}
                   <span className="text-[10px] text-brand-secondary opacity-60">
                     {ad.createdAt?.toDate ? ad.createdAt.toDate().toLocaleDateString() : '...'}
                   </span>
@@ -6288,6 +6530,12 @@ function AdCard({ ad, onClick, isFavorited, onToggleFavorite, hideFavorite, onQu
                 <span className="text-[10px] font-black uppercase tracking-[0.2em]">مميز</span>
              </div>
            )}
+           {ad.isSubscribed && (
+             <div className="bg-emerald-600 text-white px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1 border border-emerald-500/10">
+                <Crown className="w-3 h-3 text-amber-300 shrink-0" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em]">مشترك 👑</span>
+             </div>
+           )}
         </div>
 
         {!hideFavorite && (
@@ -6311,8 +6559,16 @@ function AdCard({ ad, onClick, isFavorited, onToggleFavorite, hideFavorite, onQu
 
       <div className="flex flex-col flex-1 p-6 space-y-4">
         <div className="space-y-1">
-          <p className="text-[9px] font-black uppercase tracking-[0.3em] text-brand-primary opacity-30">{ad.category}</p>
-          <h3 className="font-serif font-black text-xl leading-tight line-clamp-2 text-brand-primary group-hover:text-brand-primary/80 transition-colors">{ad.title}</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black text-amber-700 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/20 shadow-sm">
+              {CATEGORIES.find(c => c.id === ad.category)?.label || ad.category}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-black text-brand-secondary opacity-70">
+              <MapPin className="w-3 h-3 text-brand-primary" />
+              {ad.location?.city || 'بغداد'}
+            </span>
+          </div>
+          <h3 className="font-serif font-black text-lg leading-tight line-clamp-2 text-brand-primary group-hover:text-amber-600 transition-colors pt-1.5">{ad.title}</h3>
         </div>
         
         <div className="flex-1" />
@@ -6646,6 +6902,145 @@ function BlockedUsersView({ user, blockedUsers, onBack }: any) {
         message={`هل تريد إلغاء حظر "${userToUnblock?.displayName}"؟`}
         confirmText="إلغاء الحظر"
       />
+    </motion.div>
+  );
+}
+
+function AboutUsView({ onBack }: { onBack: () => void }) {
+  return (
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.98 }}
+      transition={{ duration: 0.4 }}
+      className="max-w-4xl mx-auto px-4 py-8 md:py-16 space-y-12 text-right relative bg-[#fcfbfa] rounded-[32px] border border-brand-border/40 my-8 shadow-sm"
+    >
+      {/* Upper ambient card background glow */}
+      <div className="absolute top-0 right-1/4 w-80 h-80 bg-amber-500/5 blur-[120px] rounded-full pointer-events-none" />
+      <div className="absolute top-20 left-10 w-60 h-60 bg-blue-500/5 blur-[100px] rounded-full pointer-events-none" />
+
+      {/* Header section with clean Display Typography */}
+      <div className="space-y-4">
+        <button 
+          onClick={onBack}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-brand-muted border border-brand-border/60 text-brand-primary rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm cursor-pointer"
+        >
+          <ChevronRight className="w-4 h-4" />
+          <span>الرجوع للرئيسية</span>
+        </button>
+
+        <div className="pt-4 space-y-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs font-black text-amber-700">
+            <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+            <span>منصتنا الوطنية الأولى</span>
+          </div>
+          <h1 className="text-3xl md:text-5xl font-serif font-black tracking-tight text-[#111] leading-tight flex items-center gap-3">
+            سوق الرافدن
+          </h1>
+          <p className="text-sm md:text-base font-serif text-[#666] tracking-wide">
+            نبني جسور التبادل التجاري داخل المحافظات ببرمجة وطنية خالصة 🇮🇶
+          </p>
+        </div>
+      </div>
+
+      {/* Main Core Identity Card (Bento Style) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="md:col-span-2 p-6 md:p-8 bg-white rounded-3xl border border-brand-border/60 shadow-sm space-y-4">
+          <h2 className="text-lg font-serif font-bold text-[#111]">رؤيتنا ورسالتنا</h2>
+          <p className="text-xs md:text-sm text-[#444] font-medium leading-relaxed">
+            تأسس <strong>سوق الرافدين</strong> ليكون البوابة الإلكترونية الوطنية الكبرى التي تجمع ملايين البائعين والمشترين من زاخو إلى البصرة في بيئة تجارية آمنة، سريعة، ومصممة خصيصاً لتناسب احتياجات ومحافظات بلدنا الحبيب. نوفر حلاً تقنياً متطوراً للتداول اليومي للسيارات، العقارات، الأجهزة الذكية، والسلع النادرة بكل سهولة ويسر.
+          </p>
+          <div className="flex gap-4 pt-4 border-t border-brand-border/40">
+            <div>
+              <span className="block text-2xl font-serif font-black text-brand-primary">+٥٠ ألف</span>
+              <span className="text-[10px] text-brand-secondary font-bold">إعلان متداول</span>
+            </div>
+            <div className="h-10 w-[1px] bg-brand-border" />
+            <div>
+              <span className="block text-2xl font-serif font-black text-brand-primary">١٠٠%</span>
+              <span className="text-[10px] text-brand-secondary font-bold">هوية عراقية</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 bg-[#0a0f1d] text-white rounded-3xl border border-white/5 shadow-sm space-y-4 flex flex-col justify-between">
+          <div className="space-y-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+              <Zap className="w-4 h-4 text-emerald-400" />
+            </div>
+            <h3 className="text-sm font-serif font-bold text-amber-400">تواصل فوري آمن</h3>
+            <p className="text-[11px] text-slate-300 font-bold leading-relaxed">
+              تقنيات متقدمة للمراسلة النصية، التسجيلات الصوتية، وإرسال عروض الأسعار بصورة فورية مع إشعارات دفع ذكية للبث المباشر.
+            </p>
+          </div>
+          <div className="text-[10px] text-slate-400 font-black pt-4 border-t border-white/5 flex items-center justify-between">
+            <span>سرعة الخادم العراقي</span>
+            <Activity className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+          </div>
+        </div>
+      </div>
+
+      {/* National Developer Recognition */}
+      <div className="p-6 md:p-8 bg-gradient-to-br from-amber-50/50 to-orange-50/25 rounded-3xl border border-amber-200/50 space-y-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20 shrink-0">
+            <Award className="w-5 h-5 text-amber-600" />
+          </div>
+          <div>
+            <h3 className="text-base font-serif font-black text-[#111]">الهوية البرمجية والتطوير الوطني</h3>
+            <p className="text-[11px] text-brand-secondary font-semibold">بأعلى المعايير والحلول التقنية المبتكرة</p>
+          </div>
+        </div>
+
+        <div className="space-y-4 text-xs md:text-sm text-[#333] font-medium leading-relaxed">
+          <p>
+            تفتخر منصة <strong>سوق الرافدين</strong> بأنها بُنيت وطُوّرت بالكامل داخل حدود الوطن الحبيب بواسطة المهندسين الوطنيين في <span className="text-amber-700 font-black">سوق العراق للحلول البرمجية</span>. تمت هندسة قواعد البيانات وهيكلية النظام من الصفر لضمان الأمان الفائق، والسرعة الخاطفة مع حماية بيانات ومعلومات المستخدمين العراقيين الكرام.
+          </p>
+        </div>
+
+        {/* License Box */}
+        <div className="p-4 bg-white/70 rounded-2xl border border-amber-200/50 space-y-2">
+          <div className="flex items-center gap-2 text-[10px] text-slate-500 font-black">
+            <Terminal className="w-3.5 h-3.5 text-amber-600" />
+            <span>سلامة وحماية الإبداع البرمجي</span>
+          </div>
+          <p className="text-[11px] text-[#444] font-medium leading-relaxed">
+            الرمز البرمجي الأصلي، التصاميم البصرية، ومحركات تصفية البيانات محمية بالكامل ومسجلة بموجب القوانين النافذة لحماية الإبداع وحقوق الملكية الفكرية والبرمجية العراقية لعام ٢٠٢٦. يمنع منعاً باتاً استنساخ البنية التحتية أو السيرفرات دون إذن كتابي رسمي.
+          </p>
+        </div>
+      </div>
+
+      {/* Safety & Trust Section */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-serif font-bold text-[#111]">أركان الأمان والثقة في المنصة</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-5 bg-white rounded-2xl border border-brand-border/60 shadow-sm flex gap-4">
+            <div className="w-10 h-10 rounded-xl bg-blue-500/5 flex items-center justify-center shrink-0 border border-blue-500/10 text-blue-600">
+              <Shield className="w-5 h-5" />
+            </div>
+            <div className="space-y-1 text-right">
+              <h4 className="text-xs font-serif font-black text-[#111]">مراجعة وتدقيق الإعلانات</h4>
+              <p className="text-[11px] text-[#555] font-semibold leading-relaxed">نراجع كل منتج وإعلان يدوياً وبدقة عالية لمنع ومكافحة محاولات النصب وضمان جودة المعروضات دائماً.</p>
+            </div>
+          </div>
+
+          <div className="p-5 bg-white rounded-2xl border border-brand-border/60 shadow-sm flex gap-4">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/5 flex items-center justify-center shrink-0 border border-emerald-500/10 text-emerald-600">
+              <Users className="w-5 h-5" />
+            </div>
+            <div className="space-y-1 text-right">
+              <h4 className="text-xs font-serif font-black text-[#111]">نظام تقييم موثق وبناء</h4>
+              <p className="text-[11px] text-[#555] font-semibold leading-relaxed">يتيح نظامنا تبادل تقييمات حقيقية للمشترين والبائعين لبناء مجتمع مالي وتجاري عراقي متراحم وقوي.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Footer block inside page */}
+      <div className="pt-8 border-t border-brand-border/60 text-center space-y-2">
+        <p className="text-[10px] text-brand-secondary font-bold">سوق الرافدين - الإصدار الذهبي الفاخر ٢٠٢٦</p>
+        <p className="text-[9px] text-brand-secondary opacity-40">صنع بحب وبرمجة مخلصة من شباب العراق العظيم 🇮🇶</p>
+      </div>
     </motion.div>
   );
 }
