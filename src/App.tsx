@@ -109,11 +109,11 @@ async function triggerNativeNotification(title: string, body: string, type?: str
         if (registration) {
           registration.showNotification(title, {
             body: body,
-            icon: 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png',
+            icon: 'https://www.image2url.com/r2/default/images/1779571651731-ef0505ca-d444-480b-a9f9-11fb7fbd8317.png',
             tag: type || 'direct',
             renotify: true,
             vibrate: [100, 50, 100],
-            badge: 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png',
+            badge: 'https://www.image2url.com/r2/default/images/1779571651731-ef0505ca-d444-480b-a9f9-11fb7fbd8317.png',
             data: { url: window.location.origin }
           } as any);
           return;
@@ -127,7 +127,7 @@ async function triggerNativeNotification(title: string, body: string, type?: str
     try {
       const notif = new Notification(title, {
         body: body,
-        icon: 'https://cdn-icons-png.flaticon.com/512/3081/3081559.png',
+        icon: 'https://www.image2url.com/r2/default/images/1779571651731-ef0505ca-d444-480b-a9f9-11fb7fbd8317.png',
         tag: type || 'direct',
         renotify: true
       } as any);
